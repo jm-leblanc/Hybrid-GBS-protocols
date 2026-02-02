@@ -1,0 +1,142 @@
+# Further VCF filtering and creating a 0,1,2 file
+
+JULY 21 2025
+
+This comes after running gbs2ploidy and getting some confusing results. I spoke with Trevor Faske, who recommended that I remove multi-allelic data from my VCF, and recommended that I try plotting some of my variant call data before running gbs2ploidy or Entropy.
+
+Here I filter out multi-allelic sites and indels, and I create a 0,1,2 file that can be used for exploring the data before running Entropy
+
+**Reminders**
+* My original VCF file (variant called with allele depth information) is `fescue_all_variants_with_AD.vcf.gz`
+* After I filtered that for completeness/MAF etc., I got a file called `fescue_mm80_indiv70_maf_05_with_AD.recode.vcf`
+
+## Create directory and copy filtered VCF
+
+```bash
+cd /home/lebla179/scratch 
+mkdir vcf_exploration
+cp vcftools_filtering_with_AD/fescue_mm80_indiv70_maf_05_with_AD.recode.vcf vcf_exploration/
+```
+
+## Load StdEnv and vcftools
+```bash
+module load StdEnv/2023
+module spider vcftools # Check the latest version of vcftools and load that one
+module load vcftools/0.1.16
+```
+## Find and remove multi-allelic sites
+###  Locate multi-allelic sites
+
+```bash
+# Count multi-allelic sites in ORIGINAL file
+echo "=== ORIGINAL VCF ANALYSIS ==="
+echo "Total variants:"
+grep -v "^#" fescue_mm80_indiv70_maf_05_with_AD.recode.vcf | wc -l
+
+echo "Multi-allelic sites (>2 alleles):"
+grep -v "^#" fescue_mm80_indiv70_maf_05_with_AD.recode.vcf | \
+awk '{split($5,alts,","); if(length(alts)>1) print}' | wc -l
+
+echo "Bi-allelic sites (exactly 2 alleles):"
+grep -v "^#" fescue_mm80_indiv70_maf_05_with_AD.recode.vcf | \
+awk '{split($5,alts,","); if(length(alts)==1) print}' | wc -l
+```
+
+Results:
+```bash
+=== ORIGINAL VCF ANALYSIS ===
+Total variants:
+24932
+Multi-allelic sites (>2 alleles):
+832
+Bi-allelic sites (exactly 2 alleles):
+24100
+```
+### Filter multi-allelic sites
+
+```bash
+# Filter to keep only bi-allelic sites (max 2 alleles per site)
+vcftools --vcf fescue_mm80_indiv70_maf_05_with_AD.recode.vcf \
+         --max-alleles 2 \
+         --min-alleles 2 \
+         --recode \
+         --recode-INFO-all \
+         --out fescue_biallelic
+```
+
+This creates: `fescue_biallelic.recode.vcf`
+
+## Check and remove indels
+
+### Check for indels
+
+```bash
+# Do I have indels in my filtered VCF?
+echo "Indels in fescue_biallelic.recode.vcf:"
+grep -v "^#" fescue_biallelic.recode.vcf | \
+awk 'length($4) != length($5) || length($4) > 1 || length($5) > 1' | wc -l
+
+echo "SNPs in fescue_biallelic.recode.vcf:"
+grep -v "^#" fescue_biallelic.recode.vcf | \
+awk 'length($4) == 1 && length($5) == 1' | wc -l
+```
+
+Results:
+```bash
+Indels in fescue_biallelic.recode.vcf:
+638
+SNPs in fescue_biallelic.recode.vcf:
+23462
+```
+
+### Filter out indels
+```bash
+# Remove the 638 indels - takes just a few seconds
+vcftools --vcf fescue_biallelic.recode.vcf \
+         --remove-indels \
+         --recode \
+         --recode-INFO-all \
+         --out fescue_biallelic_snps_only
+```
+
+# Check the result
+```bash
+echo "Final SNP count:"
+grep -v "^#" fescue_biallelic_snps_only.recode.vcf | wc -l
+```
+
+Result:
+```bash
+Final SNP count:
+23462
+```
+Successfully removed indels
+
+## Generating a 0,1,2 file that will do genotype calls
+
+A 0,1,2 file is a compact matrix that has each individual in its own row and each variant in its own column. The values in each position indicate the genotype for that individual at that position:
+* 0 = Homozygous for the reference allele (e.g., AA)
+* 1 = Heterozygous (e.g., AT)
+* 2 = Homozygous for the alternative allele (e.g., TT)
+* -1 = Missing data (no genotype call)
+
+You can generate it using the following code:
+
+```bash
+vcftools --vcf fescue_biallelic_snps_only.recode.vcf --012 --out fescue_genotype_matrix
+```
+
+Generates three files:
+
+* `fescue_genotype_matrix.012` - The main matrix file
+  *Rows = individuals/samples
+  *Columns = SNP positions
+  *Values = 0, 1, 2, or -1
+
+* `fescue_genotype_matrix.012.indv` - Individual names (row labels)
+  * Lists the sample IDs in the same order as rows in the .012 file
+
+* `fescue_genotype_matrix.012.pos` - SNP positions (column labels)
+  *Lists chromosome and position for each SNP column
+
+I then transferred these files to my computer using Globus, so I could explore the data as recommended by Trevor.

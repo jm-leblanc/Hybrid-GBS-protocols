@@ -1,0 +1,156 @@
+ENTROPY
+August 6, 2025
+
+## AUGUST 27, 2025: The code here is likely outdated; the working versions can be found in my scratch directory. But the annotations here could be useful
+
+For my previous steps I turned everything into a Nextflow Pipeline, which was tedious and took a lot of troubleshooting. This time, I'm going to just try and run it as close to Amanda's Pipeline as possible. # August 8th: I lied, I converted it to Nextflow
+
+An additional pipeline that seems helpful is found here: https://github.com/sonia23cld/Entropy?tab=readme-ov-file
+This also contains the script necessary to convert the VCF file to MPGL
+
+From Amanda's pipeline document: "entropy takes an MPGL file as input, in which each line has genotype likelihood data for each individual a specific locus. On each line, there’s a grouping of 3 values for each individual (AA AB BB). A larger number means less likely and a 0 means 100% likely. However, having all three values as 0 mean there’s no data at that locus for that indiv"
+
+
+Copy filtered vcf file 
+```bash
+cp fescue_biallelic_snps_only.recode.vcf ../entropy/
+```
+From existing directory 'scratch/vcf_exploration' 
+
+This VCF file is the most recently filtered one; it was filtered first for completeness, and then I filtered again to remove multivariant sites and indels
+
+### Checking the file to make sure it can be converted to MPGL
+
+```bash
+[lebla179@cedar2 entropy]$ # See all FORMAT field definitions
+grep "##FORMAT=" fescue_biallelic_snps_only.recode.vcf
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="List of Phred-scaled genotype likelihoods">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Number of high-quality bases">
+##FORMAT=<ID=SP,Number=1,Type=Integer,Description="Phred-scaled strand bias P-value">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths (high-quality bases)">
+##FORMAT=<ID=ADF,Number=R,Type=Integer,Description="Allelic depths on the forward strand (high-quality bases)">
+##FORMAT=<ID=ADR,Number=R,Type=Integer,Description="Allelic depths on the reverse strand (high-quality bases)">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+```
+
+The `PL` field is what we're looking for here; this is what the conversion script will extract to make the VCF into an MPGL
+
+### Check the number of samples and SNPs
+
+```bash
+echo "Number of samples:"
+head -1000 fescue_biallelic_snps_only.recode.vcf | grep "^#CHROM" | tr '\t' '\n' | tail -n +10 | wc -l
+
+echo "Number of SNPs:"
+grep -v "^#" fescue_biallelic_snps_only.recode.vcf | wc -l
+```
+
+```bash
+Number of samples:
+97
+Number of SNPs:
+23462
+```
+
+
+#### Setting up the R environment
+
+load up R
+make sure you check that the necessary packages are installed
+
+```R
+c("vcfR", "MASS") %in% rownames(installed.packages())
+```
+
+Both should be TRUE
+
+
+## Running the r script
+
+my script to run the conversion is `VCFtoMPGL.R`. It is modified from `inputdataformat_Entropy.R` found at this repository: https://github.com/sonia23cld/Entropy?tab=readme-ov-file which is modified from V. Shastry's script. You can run it in an interactive R environment, it doesn't take too long. 
+
+```bash 
+Rscript VCFtoMPGL.R
+```
+
+
+This outputs several files:
+
+* cinds_fescue_biallelic_snps_only.recode.txt  
+* fescue_biallelic_snps_only.recode.mpgl  # The MPGL file entropy needs
+* ploidy_inds.txt  # The index of ploidy for each sample. We are treating them all as diploid, so each entry is simply "2"
+* pntest_mean_gl.txt  
+* qk2inds.txt  
+* qk3inds.txt  
+* qk4inds.txt
+
+From the GitHub, some code to check the output worked correctly:
+
+`wc -l fescue_biallelic_snps_only.recode.mpgl` This number should be one greater than the number of loci in your data set
+
+```bash
+23463 fescue_biallelic_snps_only.recode.mpgl
+```
+
+One more than my number of loci (23462), so far so good
+
+'awk -F' ' 'NR==3{print NF}' fescue_biallelic_snps_only.recode.mpgl' This number should be one greater than the number of genotype classes times the number of individuals in your data set. This should be true for all lines in your input data file after line number 3.
+formula: (ploidy + 1) × number_of_individuals + 1
+
+my output: 292
+
+because I'm treating all my individuals as diploids, this number is correct
+Diploid: (2+1) × 97 + 1 = 292
+
+
+### INSTALLING ENTROPY
+
+downloaded zipped file from here: https://bitbucket.org/buerklelab/mixedploidy-entropy/downloads/
+
+and transferred all extracted contents to Cedar `/home/lebla179/scratch/entropy/software`
+
+# Load the GNU Compiler Collection (required for C/C++ compilation)
+module load gcc
+
+# Load HDF5 library (required for entropy's data format support)
+module load hdf5
+
+# Load GNU Scientific Library (required for mathematical functions)
+module load gsl
+
+Prepare and configure
+
+# Navigate to the software directory
+cd /home/lebla179/scratch/entropy/software
+
+# Make the configure script executable
+chmod +x configure
+
+# Run configure to check dependencies and generate Makefile
+# --prefix sets the installation directory to your home space
+./configure --prefix=$HOME/local/entropy
+
+If reconfiguring is needed: 
+# If configure fails initially (e.g., missing GSL), clean up and retry:
+make clean                    # Remove any partial build files
+rm -f config.cache           # Remove configuration cache
+./configure --prefix=$HOME/local/entropy  # Reconfigure with all modules loaded
+
+Compile softward
+
+`# Compile entropy and estpost.entropy executables
+make`
+
+install
+# Install executables to $HOME/local/entropy/bin/
+make install
+
+# Add entropy to your PATH permanently
+echo 'export PATH=$HOME/local/entropy/bin:$PATH' >> ~/.bashrc
+
+
+
+### RUNNING ENTROPY THROUGH NEXTFLOW
+
+update with my main.nf and .sh scripts and config
+

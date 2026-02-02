@@ -1,0 +1,69 @@
+Useful code for checking my sequencing data.
+
+## AUGUST 27, 2025
+# I wrote and executed all of this a while ago, I don't know if this is still useful
+
+This all comes from Seqera
+
+LOOKING AT ALIGNMENT STATS
+
+samtools is helpful for generating summary statistics
+
+#### Alignment stats for each sample ####
+
+for bam in aligned/*.bam; do
+    echo "=== $(basename $bam) ==="
+    samtools flagstat $bam
+    echo
+done
+
+#> this will slowly generate the sequence length and % mapped for each sample individually
+
+
+### Summary alignment stats####
+
+
+
+Looking at variant calling stats:
+
+# Navigate to the results directory
+cd $SCRATCH/variant_calling_results
+
+# Check file sizes and existence
+ls -lh
+
+# Quick VCF validation and variant count
+module load bcftools/1.19
+bcftools view -H fescue_all_variants.vcf.gz | wc -l
+
+# Check the first few variants
+bcftools view fescue_all_variants.vcf.gz | head -20
+
+# Generate a stats summary
+bcftools stats fescue_all_variants.vcf.gz > fescue_variants_stats.txt
+
+# Review the stats summary
+head -50 fescue_variants_stats.txt
+
+# Look for key metrics
+grep -E "number of records|number of SNPs|number of indels" fescue_variants_stats.txt
+
+GENERATE A MULTIQ INTERACTIVE REPORT:
+
+# Navigate to your alignment results directory
+cd $SCRATCH/alignment/results/aligned
+
+# Load MultiQC
+module load multiqc
+
+# Run MultiQC - it will automatically find and process all relevant files
+multiqc . --outdir multiqc_alignment_report --title "Fescue_Alignment_QC"
+
+echo "MultiQC report generated in: multiqc_alignment_report/"
+
+then download the resulting report from compute Canada
+
+MULTIQC for variant calling
+
+# MultiQC can also process bcftools stats!
+multiqc . --outdir multiqc_variant_report --title "Fescue_Variant_QC"

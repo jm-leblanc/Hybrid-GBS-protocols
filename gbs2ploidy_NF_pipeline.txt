@@ -1,0 +1,391 @@
+GBS2PLOIDY USING NEXTFLOW PIPELINES
+
+## What is gbs2ploidy?
+
+gbs2ploidy is an R package developed by Zachary Gompert (https://cran.r-project.org/web/packages/gbs2ploidy/index.html). It functions to infer ploidy in GBS data using Bayesian statistics. 
+
+## What do you need to run gbs2ploidy?
+
+* A filtered VCF file that has been mapped to an aligned genome
+* Estimates of heterozygosity at each variant
+* Allele depth information 
+
+## PSA about gbs2ploidy limitations
+
+#### Allele depth in variant calling
+In order to generate allele depth information, you need to specifically request these annotations when you running variant calling (at least if you're using bcftools). It will look something like this:
+
+```bash
+bcftools mpileup \
+    --annotate # This annotate step is the key! FORMAT/AD,FORMAT/ADF,FORMAT/ADR,FORMAT/DP,FORMAT/SP,INFO/AD,INFO/ADF,INFO/ADR \ 
+    --output-type u \
+    --fasta-ref ${REF_GENOME} \
+    ${BAM_FILES} | \
+    
+bcftools call \
+    --multiallelic-caller \
+    --variants-only \
+    --output-type z \
+    --output ${OUTPUT_VCF}
+``` 
+
+If you don't add those annotation specifications to your variant calling, gbs2ploidy won't have the necessary information to infer ploidy
+
+#### Allele read matrices
+Part of the gbs2ploidy process `estprops()` asks for two arguments named `cov1` and `cov2`:
+
+```bash
+estprops(cov1 = NA, cov2 = NA, props = c(0.25, 0.33, 0.5, 0.66, 0.75), mcmc.nchain = 2, mcmc.steps = 10000, mcmc.burnin = 1000, mcmc.thin = 2)
+```
+
+These are matrices which contain read counts for each allele in the SNP. i.e.: 
+* "`cov1` is a P (number of SNPs) by N (number of individuals) matrix with read counts for the first allele (e.g., the non-reference allele). Numeric values should be provided for heterygous SNPs only, homozygous SNPs should be coded as missing data (i.e., ‘NA’)" 
+* `cov2` has the same definition, but for the second allele (e.g. the reference allele)
+* more info here: https://cran.r-project.org/web/packages/gbs2ploidy/gbs2ploidy.pdf
+
+The authors don't specify **how** to generate these `cov1` and `cov2` matrices, and so you will run into issues with gbs2ploidy if you don't make them yourself. Thankfully, Daniel DeWaters and **vcf2ploidy** have our back.
+
+### vcf2ploidy and HAD format
+
+Info about vcf2ploidy here: https://github.com/dandewaters/vcf2ploidy/tree/master
+
+Apparently, the `cov1` and `cov2` matrices required for gbs2ploidy are in what's called **Heterozygous Allele Depth (HAD)** format. Conveniently, Daniel DeWaters' **vcf2ploidy** program includes a function for converting your filtered VCF file to the appropriate matrix format: `vcf2had`. There is also a full `vcf2ploidy` function which converts your VCF to HAD, and then runs it through the gbs2ploidy pipeline!
+
+### MAIN TAKEAWAY MESSAGE:
+Before proceeding with gbs2ploidy, make sure that you 1) have allele depth information in your filtered VCF file, and 2) have converted your VCF to HAD format (or, generated your `cov1` and `cov2` matrices by some other means
+
+---
+
+## Running gbs2ploidy
+
+### Prerequisites
+
+The scripts I used to run **vcf2had** and then **gbs2ploidy** require several modules and packages to work correctly. I may adjust my script so these contingencies are installed and loaded as part of the pipeline, but for now, the following will have to be installed/loaded before running the nextflow:
+
+#### On Compute Canada/Cedar:
+
+```bash
+# Load required modules
+module load StdEnv/2023 gcc/12.3 jags/4.3.2 r/4.3.1 java/17.0.6 nextflow/25.04.6
+
+# Install packages (one-time setup, but this takes quite a long time)
+R -e "install.packages('rjags', repos = 'https://cloud.r-project.org')"
+R -e "install.packages('gbs2ploidy', repos = 'https://cloud.r-project.org')"
+R -e "install.packages('remotes', repos = 'https://cloud.r-project.org')"
+R -e "remotes::install_github('dandewaters/vcf2ploidy')"
+```
+
+If you think you've already installed these and want to check if they're in your current environment:
+
+```bash
+R --slave -e "library(rjags); library(gbs2ploidy); library(vcf2ploidy); cat('SUCCESS: All packages loaded\n')"
+```
+
+### Making the directory, creating the necessary files
+
+I am trying to keep my various processes (i.e. alignment, variant calling, filtering etc.) separate, so I'm creating a directory specifically for gbs2ploidy
+
+```bash
+cd /home/lebla179/scratch
+mkdir ploidy_pipeline_nextflow
+cd ploidy_pipeline_nextflow
+
+# Copying my annotated, filtered VCF file to the new directory
+cp /home/lebla179/scratch/vcftools_filtering_with_AD/fescue_mm80_indiv70_maf_05_with_AD.recode.vcf .
+
+# Verify it copied correctly
+ls -la fescue_mm80_indiv70_maf_05_with_AD.recode.vcf
+```
+
+### Other files you need in the directory *** AUGUST 8th: DON'T KNOW IF THESE ARE THE MOST RECENT VERSIONS OF THE SCRIPTS, PROBALY NOT. PULL THEM DIRECTLY FROM COMPUTE CANADA TO MAKE SRE I HAVE THE WORKING VERSIONS
+
+##### Config file, named `nextflow.config`
+
+```bash
+params {
+    // Input file
+    vcf_file = "fescue_mm80_indiv70_maf_05_with_AD.recode.vcf"  // or whatever the name of the filtered vcf is
+    outdir = "ploidy_results"
+    
+    // Analysis parameters
+    remove_double_hets = true  // prevents false positives for multiallelic sites
+    nclasses = 3              // 4n, 6n, 8n (the ploidies I might potentially see in my dataset)
+    
+    // MCMC parameters
+    mcmc_nchain = 4
+    mcmc_steps = 15000        // Increased for 97 samples
+    mcmc_burnin = 2500        // Longer burnin for stability
+    mcmc_thin = 2
+}
+
+process {
+    executor = 'slurm'
+    module = ['StdEnv/2023', 'gcc/12.3', 'jags/4.3.2', 'r/4.3.1']   // All modules necessary for gbs2ploidy to function. They're already installed in my environment
+    clusterOptions = '--account=def-mcfarlas'  
+    
+    withName: 'VCF_TO_HAD' {
+        memory = '16 GB'
+        cpus = 1
+        time = '1h'
+    }
+    
+    withName: 'PLOIDY_ANALYSIS' {
+        memory = '48 GB'
+        cpus = 4
+        time = '15h'  // Increased time for longer MCMC
+    }
+}
+
+executor {
+    $slurm {
+        queueSize = 50
+        submitRateLimit = '10 sec'
+    }
+}
+
+timeline {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_timeline.html"
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_report.html"
+}
+
+trace {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_trace.txt"
+}
+
+dag {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/pipeline_dag.svg"
+}
+```
+
+##### Nextflow pipeline for vcf2had and gbs2ploidy, named `main.nf`
+
+```bash
+#!/usr/bin/env nextflow
+
+nextflow.enable.dsl = 2
+
+process VCF_TO_HAD {
+    tag "Converting VCF to HAD format"
+    publishDir "${params.outdir}/intermediate", mode: 'copy'
+    
+    input:
+    path vcf_file
+    
+    output:
+    path "had_data.rds", emit: had_data
+    path "vcf_conversion_log.txt", emit: log
+    
+    script:
+    """
+    #!/usr/bin/env Rscript
+    
+    # Load required libraries
+    library(vcf2ploidy)
+    
+    # Start logging
+    cat("=== VCF to HAD Conversion Started ===\\n", file="vcf_conversion_log.txt")
+    cat("Time:", as.character(Sys.time()), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Input file: ${vcf_file}\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Remove double hets: ${params.remove_double_hets}\\n", file="vcf_conversion_log.txt", append=TRUE)
+    
+    # Convert VCF to HAD format
+    cat("Converting VCF to HAD format...\\n", file="vcf_conversion_log.txt", append=TRUE)
+    had_data <- vcf2had(
+        filename = "${vcf_file}",
+        remove_double_hets = ${params.remove_double_hets ? 'TRUE' : 'FALSE'}
+    )
+    
+    # Log results
+    cat("HAD conversion complete!\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Data dimensions:", dim(had_data), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Number of samples:", ncol(had_data)/2, "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Number of variants:", nrow(had_data), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    
+    # Save HAD data
+    saveRDS(had_data, "had_data.rds")
+    cat("HAD data saved to had_data.rds\\n", file="vcf_conversion_log.txt", append=TRUE)
+    
+    cat("Conversion completed at:", as.character(Sys.time()), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    """
+}
+
+process PLOIDY_ANALYSIS {
+    tag "Estimating ploidy with MCMC"
+    publishDir "${params.outdir}/results", mode: 'copy'
+    
+    input:
+    path had_data
+    
+    output:
+    path "ploidy_results.rds", emit: results
+    path "ploidy_summary.csv", emit: summary
+    path "analysis_log.txt", emit: log
+    
+    script:
+    """
+    #!/usr/bin/env Rscript
+    
+    # Load ALL required libraries with dependency checking
+    cat("=== Loading Required Libraries ===\\n", file="analysis_log.txt")
+    
+    # Load rjags first (needs JAGS)
+    library(rjags)
+    cat("✓ rjags loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Load gbs2ploidy (depends on rjags and MASS)
+    library(gbs2ploidy)
+    cat("✓ gbs2ploidy loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Load vcf2ploidy for consistency
+    library(vcf2ploidy)
+    cat("✓ vcf2ploidy loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+    
+    cat("=== Ploidy Analysis Started ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Time:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Log analysis parameters
+    cat("\\n=== Analysis Parameters ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Number of classes:", ${params.nclasses}, "\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC chains:", ${params.mcmc_nchain}, "\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC steps:", ${params.mcmc_steps}, "\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC burnin:", ${params.mcmc_burnin}, "\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC thin:", ${params.mcmc_thin}, "\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Load HAD data
+    cat("\\n=== Loading HAD Data ===\\n", file="analysis_log.txt", append=TRUE)
+    had_data <- readRDS("${had_data}")
+    cat("HAD data loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Prepare matrices for gbs2ploidy
+    cat("\\n=== Preparing Data Matrices ===\\n", file="analysis_log.txt", append=TRUE)
+    num_cols <- ncol(had_data)
+    cov1_cols <- seq(1, num_cols, 2)  # Odd columns (first allele)
+    cov2_cols <- seq(2, num_cols, 2)  # Even columns (second allele)
+    
+    cov1 <- as.matrix(had_data[, cov1_cols])
+    cov2 <- as.matrix(had_data[, cov2_cols])
+    ids <- names(had_data)[cov1_cols]
+    
+    cat("Number of samples:", length(ids), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Number of variants:", nrow(cov1), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Matrix dimensions - cov1:", dim(cov1), "cov2:", dim(cov2), "\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Estimate allelic proportions using MCMC (this is the slow step!)
+    cat("\\n=== Starting MCMC Estimation ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("This step uses JAGS for Bayesian MCMC and may take several hours...\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC started at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+    
+    props <- estprops(
+        cov1 = cov1, 
+        cov2 = cov2,
+        props = c(0.125, 0.17, 0.25, 0.33, 0.375, 0.5, 0.625, 0.67, 0.75, 0.83, 0.875), 	// these are all the potential ratios of alleles we might see for 4n, 6n, and 8n samples
+        mcmc.nchain = ${params.mcmc_nchain}, 
+        mcmc.steps = ${params.mcmc_steps}, 
+        mcmc.burnin = ${params.mcmc_burnin}, 
+        mcmc.thin = ${params.mcmc_thin}
+    )
+    
+    cat("MCMC estimation completed at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Calculate heterozygosity and depth statistics
+    cat("\\n=== Calculating Summary Statistics ===\\n", file="analysis_log.txt", append=TRUE)
+    H <- apply(!is.na(cov1), 2, mean)  # Heterozygosity (proportion of non-missing loci)
+    D <- apply(cov1 + cov2, 2, mean, na.rm = TRUE)  # Mean depth per sample
+    
+    cat("Average heterozygosity across samples:", round(mean(H), 3), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Average depth across samples:", round(mean(D), 1), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Heterozygosity range:", round(min(H), 3), "to", round(max(H), 3), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Depth range:", round(min(D), 1), "to", round(max(D), 1), "\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Estimate ploidy using PCA and discriminant analysis
+    cat("\\n=== Estimating Ploidy Classes ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Using PCA and discriminant analysis to classify samples...\\n", file="analysis_log.txt", append=TRUE)
+    
+    results <- estploidy(
+        alphas = props,
+        het = H,
+        depth = D,
+        train = FALSE,  # No training set - unsupervised classification
+        nclasses = ${params.nclasses},
+        ids = ids,
+        pcs = 1:2  # Use first 2 principal components
+    )
+    
+    cat("Ploidy estimation completed!\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Save full results object
+    saveRDS(results, "ploidy_results.rds")
+    cat("Full results saved to ploidy_results.rds\\n", file="analysis_log.txt", append=TRUE)
+    
+    # Create human-readable summary table
+    if (!is.null(results\$pp)) {
+        cat("\\n=== Creating Summary Table ===\\n", file="analysis_log.txt", append=TRUE)
+        
+        # Get class assignments and probabilities
+        class_assignments <- apply(results\$pp[,-1], 1, which.max)
+        max_probabilities <- apply(results\$pp[,-1], 1, max)
+        
+        # Create comprehensive summary
+        summary_df <- data.frame(
+            Sample_ID = results\$pp[,1],
+            Predicted_Ploidy_Class = class_assignments,
+            Max_Probability = round(max_probabilities, 3),
+            Class_1_Prob = round(results\$pp[,2], 3),
+            Class_2_Prob = round(results\$pp[,3], 3),
+            Class_3_Prob = round(results\$pp[,4], 3),
+            Heterozygosity = round(H, 3),
+            Mean_Depth = round(D, 1)
+        )
+        
+        write.csv(summary_df, "ploidy_summary.csv", row.names = FALSE)
+        cat("Summary table saved to ploidy_summary.csv\\n", file="analysis_log.txt", append=TRUE)
+        
+        # Print final summary statistics
+        cat("\\n=== FINAL RESULTS SUMMARY ===\\n", file="analysis_log.txt", append=TRUE)
+        cat("Total samples analyzed:", nrow(summary_df), "\\n", file="analysis_log.txt", append=TRUE)
+        cat("Class 1 samples:", sum(class_assignments == 1), "\\n", file="analysis_log.txt", append=TRUE)
+        cat("Class 2 samples:", sum(class_assignments == 2), "\\n", file="analysis_log.txt", append=TRUE)
+        cat("Class 3 samples:", sum(class_assignments == 3), "\\n", file="analysis_log.txt", append=TRUE)
+        
+        # Calculate confidence statistics
+        high_conf <- sum(max_probabilities > 0.8)
+        med_conf <- sum(max_probabilities > 0.6 & max_probabilities <= 0.8)
+        low_conf <- sum(max_probabilities <= 0.6)
+        
+        cat("\\nAssignment Confidence:\\n", file="analysis_log.txt", append=TRUE)
+        cat("High confidence (>0.8):", high_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+        cat("Medium confidence (0.6-0.8):", med_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+        cat("Low confidence (<0.6):", low_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+        
+    } else {
+        cat("ERROR: No assignment probabilities generated!\\n", file="analysis_log.txt", append=TRUE)
+    }
+    
+    cat("\\n=== Analysis Complete ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Completed at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+    """
+}
+
+workflow {
+    // Create input channel from VCF file
+    vcf_ch = Channel.fromPath(params.vcf_file, checkIfExists: true)
+    
+    // Step 1: Convert VCF to HAD format
+    VCF_TO_HAD(vcf_ch)
+    
+    // Step 2: Run ploidy analysis on HAD data
+    PLOIDY_ANALYSIS(VCF_TO_HAD.out.had_data)
+    
+    // Print completion message
+    PLOIDY_ANALYSIS.out.summary.view { 
+        "Ploidy analysis complete! Check results in: ${params.outdir}/results/" 
+    }
+}
+```

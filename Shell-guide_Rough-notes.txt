@@ -1,0 +1,83 @@
+ABSOLUTE DUMMIES GUIDE TO USING COMPUTE CANADA AND DOING BIOINFORMATICS
+
+
+#### BASIC LOGIN AND NAVIGATION
+
+to access, open up a command line interface
+
+```ssh username@cedar.computecanada.ca```
+
+enter password when prompted
+select appropriate 2FA when prompted
+
+
+you're now in the "lobby" of compute Canada
+
+### BASIC COMMANDS
+
+ls : lists all files in the current directory
+you can specify though, to look in different folders
+
+ls folder1 will show what's in folder1 of the current directory
+
+you can chain ../ in order to interact with folders and files in higher levels
+
+cd ../ will take you to the parent directory (i.e. one level up)
+cd ../../ will take you two levels up, and so on
+
+you can ls ../otherfolder for example to see stuff without having to go to that folder
+
+note: the commands are always in the context of your current working directory
+so, if you're in /home/def-mcfarlas/projects/fescue
+
+and fescue contains 'folder1', and 'folder2'
+
+you can do something like ls folder1/data/barcodes to see that the file 'barcodes.txt' is found in that folder
+
+then go cp folder1/data/barcodes/barcodes.txt .
+that period indicates that you want to move that file to the current directory (i.e. fescue)
+
+you could also go cp folder1/data/barcodes/barcodes.txt ../
+to move the file to fescue's parent directory (i.e. projects)
+
+cd: sets the directory to something new
+
+mv: move something mv filename.ext targetdirectory/
+or, if it's in a different folder, mv filename.ext ../otherfolder/
+
+the trailing slash (e.g. folder1/) can be a good habit, it makes your command clear that you are specifying a folder or directory, in case there's a file with the same name.
+
+you can also use mv to rename things
+
+mv oldname newname
+
+
+
+ctrl + C will interrupt the previous command if it's taking too long
+
+#### CPU ALLOCATION
+
+anything more intensive than very basic copying or editing needs to be allocated a designated node
+
+
+
+
+### Working with the fastq file (taken from statsgen wiki)
+
+After you've done this step, you can take a look at how many reads you have (which is the number of lines in your fastq file divided by 4 - if this doesn't make sense to you, make sure to take a look at what to expect in a fastq file).
+
+You can look at the number of lines like this:
+
+wc -l filename.fastq ## WC is 'wordcount' -l makes it count the number of lines
+It might also surprise you how long this takes.
+
+
+MODULES
+
+- things you can install and work with in the compute Canada environment, e.g. R, sabre etc.
+- usually you go module load StdEnv first, I'm not sure why
+-but then you can go module load "modulename"/version 
+
+you can go module spider "modulename" to find out more info about how to install it
+
+you can go "modulename" -v to see the version and if it's already installed on the system

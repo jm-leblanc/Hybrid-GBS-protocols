@@ -1,0 +1,210 @@
+TWO-CLASS GBS 2 PLOIDY (SIMPLER SCRIPTS) July 19th
+
+Setting the expected number of classes to 3 seems to be messing with the model; I'm going to try it with just two classes because that's how many I know for sure should be present
+
+ALSO, relying on Seqera a little too much I think made the scripts needlessly complicated; vcf2ploidy does what i need it to do, I don't need to make it more complicated. so, I'm simplidying the process:
+
+Config file:
+
+params {
+    // Input file
+    vcf_file = "fescue_mm80_indiv70_maf_05_with_AD.recode.vcf"
+    outdir = "ploidy_results_2class"
+
+    // Analysis parameters
+    remove_double_hets = false  // keep this false for now so multi-allelic sites that differ from the reference genome aren't removed
+    nclasses = 2        // Try known ploidies (4n and 8n) rather than guessing 6n
+
+    // MCMC parameters (matches Gompert paper)
+    mcmc_nchain = 2
+    mcmc_steps = 10000
+    mcmc_burnin = 1000
+    mcmc_thin = 3
+    
+    // Allelic proportions for your expected ploidy levels
+    props = "0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875"  // Expected for 4n and 8n
+}
+
+process {
+    executor = 'slurm'
+    
+    // Load all required modules
+    module = ['StdEnv/2023', 'gcc/12.3', 'java/17.0.6', 'jags/4.3.2', 'r/4.3.1']
+    clusterOptions = '--account=def-mcfarlas'
+
+    withName: 'VCF2PLOIDY' {
+        memory = '256 GB'    // Your original generous allocation
+        cpus = 12           // Your original CPU allocation
+        time = '36h'        // Your original time allocation
+    }
+}
+
+executor {
+    $slurm {
+        queueSize = 50
+        submitRateLimit = '10 sec'
+    }
+}
+
+timeline {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_timeline.html"
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_report.html"
+}
+
+trace {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_trace.txt"
+}
+
+dag {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/pipeline_dag.svg"
+}
+
+
+
+
+MAIN.NF
+#!/usr/bin/env nextflow
+
+nextflow.enable.dsl = 2
+
+process VCF2PLOIDY {
+    tag "Estimating ploidy from ${vcf_file}"
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    path vcf_file
+
+    output:
+    path "ploidy_results.rds", emit: results
+    path "ploidy_summary.csv", emit: summary
+    path "ploidy_analysis.log", emit: log
+
+    script:
+    def props_vector = params.props.split(',').collect { it.trim() }.join(', ')
+    """
+    #!/usr/bin/env Rscript
+    
+    # Load required libraries
+    library(vcf2ploidy)
+    
+    # Start logging
+    cat("=== VCF2PLOIDY Analysis Started ===\\n", file="ploidy_analysis.log")
+    cat("Time:", as.character(Sys.time()), "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("Input VCF:", "${vcf_file}", "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("Expected runtime: Several hours for MCMC...\\n", file="ploidy_analysis.log", append=TRUE)
+    
+    # Log parameters
+    cat("\\n=== Parameters ===\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("Remove double hets:", ${params.remove_double_hets}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("Number of classes:", ${params.nclasses}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("MCMC chains:", ${params.mcmc_nchain}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("MCMC steps:", ${params.mcmc_steps}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("MCMC burnin:", ${params.mcmc_burnin}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    cat("MCMC thin:", ${params.mcmc_thin}, "\\n", file="ploidy_analysis.log", append=TRUE)
+    
+    # Run vcf2ploidy - one function does it all!
+    cat("\\n=== Running vcf2ploidy (this will take hours) ===\\n", file="ploidy_analysis.log", append=TRUE)
+    
+    results <- vcf2ploidy(
+        filename = "${vcf_file}",
+        remove_double_hets = ${params.remove_double_hets ? 'TRUE' : 'FALSE'},
+        props = c(${props_vector}),
+        mcmc.nchain = ${params.mcmc_nchain},
+        mcmc.steps = ${params.mcmc_steps},
+        mcmc.burnin = ${params.mcmc_burnin},
+        mcmc.thin = ${params.mcmc_thin},
+        train = FALSE,
+        nclasses = ${params.nclasses},
+        pcs = 1:2
+    )
+    
+    cat("vcf2ploidy completed successfully!\\n", file="ploidy_analysis.log", append=TRUE)
+    
+    # Save results
+    saveRDS(results, "ploidy_2class_results.rds")
+    
+    # Create summary
+    if (!is.null(results\$pp)) {
+        pp <- results\$pp
+        
+        # Extract sample IDs and probabilities
+        if (ncol(pp) > ${params.nclasses}) {
+            sample_ids <- pp[,1]
+            prob_matrix <- apply(pp[,2:ncol(pp)], 2, as.numeric)
+        } else {
+            sample_ids <- paste0("Sample_", 1:nrow(pp))
+            prob_matrix <- apply(pp, 2, as.numeric)
+        }
+        
+        # Get assignments
+        class_assignments <- apply(prob_matrix, 1, which.max)
+        max_probabilities <- apply(prob_matrix, 1, max)
+        
+        # Create summary
+        summary_df <- data.frame(
+            Sample_ID = sample_ids,
+            Predicted_Ploidy_Class = class_assignments,
+            Max_Probability = round(max_probabilities, 3)
+        )
+        
+        # Add class probabilities
+        for (i in 1:ncol(prob_matrix)) {
+            summary_df[[paste0("Class_", i, "_Prob")]] <- round(prob_matrix[,i], 3)
+        }
+        
+        write.csv(summary_df, "ploidy_summary.csv", row.names = FALSE)
+        
+        # Log summary stats
+        cat("\\n=== Results Summary ===\\n", file="ploidy_analysis.log", append=TRUE)
+        cat("Total samples:", nrow(summary_df), "\\n", file="ploidy_analysis.log", append=TRUE)
+        for (i in 1:${params.nclasses}) {
+            count <- sum(class_assignments == i)
+            cat("Class", i, "samples:", count, "\\n", file="ploidy_analysis.log", append=TRUE)
+        }
+    }
+    
+    cat("\\nAnalysis completed at:", as.character(Sys.time()), "\\n", file="ploidy_analysis.log", append=TRUE)
+    """
+}
+
+workflow {
+    vcf_ch = Channel.fromPath(params.vcf_file, checkIfExists: true)
+    VCF2PLOIDY(vcf_ch)
+}
+
+
+
+SBATCH SCRIPT
+
+#!/bin/bash
+#SBATCH --account=def-mcfarlas
+#SBATCH --time=40:00:00      # 36h analysis + 4h buffer
+#SBATCH --mem=8G             # Nextflow orchestration
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gbs2ploidy_simple
+#SBATCH --output=gbs2ploidy_simple_%j.out
+#SBATCH --error=gbs2ploidy_simple_%j.err
+#SBATCH --mail-type=START,END,FAIL
+#SBATCH --mail-user=lebla179@yorku.ca
+
+# Load required modules
+module load StdEnv/2023 gcc/12.3 jags/4.3.2 r/4.3.1 java/17.0.6 nextflow/25.04.6
+
+# Set Nextflow JVM options
+export NXF_OPTS='-Xms4g -Xmx8g'
+
+# Set work directory to scratch (important for Compute Canada)
+export NXF_WORK=/home/lebla179/scratch/gbs2ploidy_2class/nextflow_work
+
+# Change to project directory
+cd /home/lebla179/scratch/gbs2ploidy_2class
+
+# Run the pipeline
+nextflow run main.nf -resume

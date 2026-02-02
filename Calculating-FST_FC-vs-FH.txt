@@ -1,0 +1,58 @@
+## Calculating FST between F. hallii and F. campestris
+## September 11, 2025
+
+I found this tutorial: https://speciationgenomics.github.io/per_site_Fst/
+Which seems to be a straightforward way to calculate genome-wide FST between two population. However, it requires me to feed it two different files containing the populations that I want to compare. Which means I'll have to go into my VCF file and pull out the FH vs FC samples
+
+I already have a metadata file that matches the sample names in the VCF file to the species and site data. I'm going to send that to Compute Canada to pull the metadata from there
+
+```bash
+scp "C:/Users/jenna/OneDrive - York University/PhD Program/Data/Hybridization data/Entropy/Fixed_MPGL/fescue_reassignment_CIs.csv" lebla179@fir.alliancecan.ca:/home/lebla179/scratch/entropy_k_2-9/FST_calcs/
+```
+
+## Pull out sample names corresponding to each of my two species
+
+Allocate an interactive session, then load up R in compute canada
+
+```bash
+admixture <- read.csv("fescue_reassignment_CIs.csv")
+
+# Check the structure to make sure it loaded correctly
+head(admixture)
+table(admixture$ci_geno_species)
+
+# Extract sample names for FH species
+fh_samples <- admixture$sample_name[admixture$ci_geno_species == "FH"]
+
+# Extract sample names for FC species  
+fc_samples <- admixture$sample_name[admixture$ci_geno_species == "FC"]
+
+# Check how many samples you have
+cat("FH samples:", length(fh_samples), "\n")
+cat("FC samples:", length(fc_samples), "\n")
+
+# Write to files for vcftools
+write.table(fh_samples, "fh_samples.txt", row.names=FALSE, col.names=FALSE, quote=FALSE)
+write.table(fc_samples, "fc_samples.txt", row.names=FALSE, col.names=FALSE, quote=FALSE)
+```
+
+Now I have lists that contain only the samples belonging to my parental populations (as determined by my confidence interval admixture overlaps)
+
+# Calcluate FST between FH and FC
+
+vcftools --gzvcf fescue_biallelic_snps_only.recode.vcf \
+--weir-fst-pop fh_samples.txt \
+--weir-fst-pop fc_samples.txt \
+--out fh_vs_fc_genome_wide
+
+This will give you an instant readout of the weighted FST (there might be a bunch of warnings before this text)
+
+```bash
+Keeping individuals in 'keep' list
+After filtering, kept 40 out of 97 Individuals
+Outputting Weir and Cockerham Fst estimates.
+Weir and Cockerham mean Fst estimate: 0.086348
+Weir and Cockerham weighted Fst estimate: 0.088038
+After filtering, kept 23462 out of a possible 23462 Sites
+Run Time = 0.00 seconds
+```

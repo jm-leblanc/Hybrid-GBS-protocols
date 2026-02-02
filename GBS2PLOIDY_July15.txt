@@ -1,0 +1,325 @@
+GBS2PLOIDY SCRIPTS UPDATED TO INCLUDE A R INSTALLATION PIPELINE
+JULY 15TH 2025
+
+THIS IS AFTER TRYING AND STRUGGLING WITH THE MAIN SCRIPT; TAKING AGES TO RUN, I"M NOT SURE IF IT"S BECAUSE THERE"S A FAILURE SOMEWHERE OR BECAUSE IT'S JUST A REALLY INTESNVIE MODEL. sO, i TRIED RUNNING IT WITH A SMALLER TEST RUN AND WAS HITTING A BUNCH OF ERRORS AND FAILURES TO START, RELATED TO THE DIFFERENT MODULES AND R PACKAGES NOT BEING RECOGNIZED, SO NOW I'm INCLUDEING A BUNCH OF R INSTALLATION STEPS IN MY NEXTFLOW PIPELINE SO IT ISN'T DEPENDENT ON THOSE PROGRAMS BEING CORRECTLY LOADED IN MY ENVIRONMENT
+
+JULY 15, 2:12PM
+I MESSED WITH  LOT OF STUFF IN AN EFFORT TO GET THIS PIPELINE RUNNING; CHECK WHICH VERSIONS OF MY MAIN AND CONFIG FILES ARE ASSOCIATED WITH EACH DIRECTORY.
+ALSO, PROBABLY A GOOD IDEA TO ADD IN TO THE PIPLINE SOMETHING THAT SKIPS THE CREATION OF THE HAD FILE IF IT'S ALREADY PRESENT
+
+
+JULY 16th:
+
+My test run finished, but seems like there was not enough memory allocated for it to complete its job. in `scratch/ploidy_test`, running 
+
+```bash
+cat work/70/7ca50b6f7b84bd2617314b2b2fdd9e/.exitcode
+```
+
+gets exit code 140, which indicates that there wasn't enough memory allocated to the process (more here https://superuser.com/questions/1811930/error-code-140-in-command-running-through-nextflow-on-slurm)
+
+
+I adjusted the config file to allocate even more memory to the ploidy analysis process
+
+also added in the "Check for had file" process:
+
+// Check if HAD file already exists
+    had_file = file("${params.outdir}/intermediate/had_data.rds")
+    
+    if (had_file.exists()) {
+        println "HAD file already exists, skipping conversion..."
+        had_data_ch = Channel.fromPath(had_file)
+    } else {
+        println "HAD file not found, running conversion..."
+        vcf_ch = Channel.fromPath(params.vcf_file, checkIfExists: true)
+        VCF_TO_HAD(vcf_ch)
+        had_data_ch = VCF_TO_HAD.out.had_data
+    }
+
+ // Run ploidy analysis
+    PLOIDY_ANALYSIS(had_data_ch)  //note the different pathway to the had data
+
+
+updated my shell script; this loads up more memory for java, which may have been bottlenecking the process
+
+```bash
+#!/bin/bash
+#SBATCH --account=def-mcfarlas
+#SBATCH --time=20:00:00  # 4 hours longer than allocated for nextflow pipeline
+#SBATCH --mem=4G
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=nextflow_ploidy_test
+#SBATCH --output=nextflow_ploidy_test_%j.out
+#SBATCH --error=nextflow_ploidy_test_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=lebla179@yorku.ca
+
+module load StdEnv/2023 gcc/12.3 jags/4.3.2 r/4.3.1 java/17.0.6 nextflow/25.04.6
+
+# Set Java memory to max to support nextflow processes
+export NXF_OPTS='-Xms2g -Xmx4g'
+
+cd /home/lebla179/scratch/ploidy_test
+
+echo "Starting pipeline at $(date)"
+nextflow run main.nf -resume
+echo "Pipeline finished at $(date)"
+```
+
+
+JULY 17TH
+
+- a pared down test run of my gbs2ploidy finally worked. The only issue is that it failed to render the summary stats and .csv after the analysis; this is because the .rds is rendered as a characters, not numeric. However, I can still look at the rds and extract information from it
+
+#### In an interactive R session:
+
+> getwd()
+[1] "/scratch/lebla179/ploidy_test/work/16/2cbc25ca6192486ddfd75e4b2bb7bf"
+> results <- readRDS("ploidy_results.rds")
+> class(results)
+[1] "list"
+> typeof(results)
+[1] "list"
+> names(results)
+[1] "pp"      "pcwghts" "pcscrs"  ## pp is the values we need for our probability matrix (i.e., how likely is it to be one ploidy or the other?) 
+> str(results)
+List of 3
+ $ pp     : chr [1:97, 1:4] "Fescue1" "Fescue10" "Fescue100" "Fescue101" ...
+  ..- attr(*, "dimnames")=List of 2
+  .. ..$ : chr [1:97] "Fescue1" "Fescue10" "Fescue100" "Fescue101" ...
+  .. ..$ : chr [1:4] "ids" "1" "2" "3"
+ $ pcwghts: num [1:12, 1:12] 0.309 -0.363 -0.364 -0.366 -0.366 ...     #pcwghts is the PCA weights,
+  ..- attr(*, "dimnames")=List of 2
+  .. ..$ : chr [1:12] "H" "" "" "" ...
+  .. ..$ : chr [1:12] "PC1" "PC2" "PC3" "PC4" ...
+ $ pcscrs : num [1:97, 1:12] -0.6982 1.1831 0.6633 0.0915 0.8445 ...  # pcscrs is PCA scores; these are useful for plotting but not necessary for the ploidy estimation
+  ..- attr(*, "dimnames")=List of 2
+  .. ..$ : chr [1:97] "Fescue1" "Fescue10" "Fescue100" "Fescue101" ...
+  .. ..$ : chr [1:12] "PC1" "PC2" "PC3" "PC4" ...
+
+
+JULY 17th:
+
+I exported the rds files to my local computer and did a bunch of visualizations. It looks like everything is there, it jsut didn't go through the calculation process because the crucial data points were characters. I'm going to upgrade my script to fix that
+
+
+
+JULY 18TH:
+
+Full gbs2ploidy run completed in 19 hours. It looks like it also completed the post-MCMC analysis and stuff
+
+
+
+
+
+
+
+> pp <0results$pp
+Error: unexpected symbol in "pp <0results"
+> pp <-results$pp
+> dim(pp)
+[1] 97  4
+> colnames(pp)
+[1] "ids" "1"   "2"   "3"
+> head(pp,10)
+          ids         1                      2
+Fescue1   "Fescue1"   "0.159748372730032"    "1.39738210345769e-86"
+Fescue10  "Fescue10"  "0.99946924614596"     "2.26463337569584e-95"
+Fescue100 "Fescue100" "0.972932864307499"    "3.45402910114922e-95"
+Fescue101 "Fescue101" "0.605795920346271"    "4.86366270714415e-93"
+Fescue102 "Fescue102" "0.970197289398409"    "6.11490245598987e-98"
+Fescue104 "Fescue104" "0.997070984309884"    "2.18382687849647e-85"
+Fescue105 "Fescue105" "7.36036779708004e-80" "1"
+Fescue106 "Fescue106" "0.999988503983834"    "1.54446143537524e-97"
+Fescue107 "Fescue107" "0.830821987577742"    "1.09011639530754e-90"
+Fescue108 "Fescue108" "0.999991524901802"    "6.69863097268561e-96"
+          3
+Fescue1   "0.840251627269968"
+Fescue10  "0.000530753854039507"
+Fescue100 "0.0270671356925004"
+Fescue101 "0.394204079653729"
+Fescue102 "0.0298027106015914"
+Fescue104 "0.00292901569011647"
+Fescue105 "3.61492399508432e-72"
+Fescue106 "1.14960161661194e-05"
+Fescue107 "0.169178012422258"
+Fescue108 "8.4750981976341e-06"
+> is.numeric(pp)
+[1] FALSE
+> any(is.na(pp))
+[1] FALSE
+> any(is.infinite(pp))
+[1] FALSE
+> class(pp)
+[1] "matrix" "array"
+> str(pp)
+ chr [1:97, 1:4] "Fescue1" "Fescue10" "Fescue100" "Fescue101" "Fescue102" ...
+ - attr(*, "dimnames")=List of 2
+  ..$ : chr [1:97] "Fescue1" "Fescue10" "Fescue100" "Fescue101" ...
+  ..$ : chr [1:4] "ids" "1" "2" "3"
+> prob_matrix <- apply(pp[,2:4], 2, as.numeric)
+> sample)ids <- pp[,1]
+Error: unexpected ')' in "sample)"
+> sample_ids <- pp[,1]
+> in.numeric(prob_matrix)
+Error in in.numeric(prob_matrix) : could not find function "in.numeric"
+> is.numeric(prob_matrix)
+[1] TRUE
+> class(prob_matrix)
+[1] "matrix" "array" 
+> dim(prob_matrix)
+[1] 97  3
+> head(prob_matrix, 10)
+                 1            2            3
+ [1,] 1.597484e-01 1.397382e-86 8.402516e-01
+ [2,] 9.994692e-01 2.264633e-95 5.307539e-04
+ [3,] 9.729329e-01 3.454029e-95 2.706714e-02
+ [4,] 6.057959e-01 4.863663e-93 3.942041e-01
+ [5,] 9.701973e-01 6.114902e-98 2.980271e-02
+ [6,] 9.970710e-01 2.183827e-85 2.929016e-03
+ [7,] 7.360368e-80 1.000000e+00 3.614924e-72
+ [8,] 9.999885e-01 1.544461e-97 1.149602e-05
+ [9,] 8.308220e-01 1.090116e-90 1.691780e-01
+[10,] 9.999915e-01 6.698631e-96 8.475098e-06
+
+
+
+
+
+
+
+EVERYTHING BELOW HERE IS POSSIBLY OUT OF DATE
+---------------------------------------------------------
+
+
+
+
+## Improved main.nf
+
+
+NOTE: NEXTFLOW AUTOMATICALLY LOOKS FOR A CONFIG FILE CALLED `nextflow.config`, so if it's named something different, the process might get screwed up. 
+So, the config. file in /ploidy_test is also called nextflow.config,even though its configurations will be differn than the one in /ploidy_pipeline
+
+#### Test-size config
+
+params {
+    // Input file
+    vcf_file = "fescue_mm80_indiv70_maf_05_with_AD.recode.vcf"
+    outdir = "ploidy_results"
+
+    // Analysis parameters
+    remove_double_hets = true
+    nclasses = 3
+
+    // Test parameters (faster for initial testing)
+    mcmc_nchain = 2
+    mcmc_steps = 5000        // Reduced for testing
+    mcmc_burnin = 1000       // Reduced for testing
+    mcmc_thin = 2
+}
+
+process {
+    executor = 'slurm'
+    
+    // Load all required modules for every process
+    module = ['StdEnv/2023', 'gcc/12.3', 'jags/4.3.2', 'r/4.3.1', 'java/17.0.6']
+    
+    clusterOptions = '--account=def-mcfarlas'
+
+    withName: 'SETUP_R_ENVIRONMENT' {
+        memory = '8 GB'
+        cpus = 1
+        time = '2h'  // R package installation can take time
+    }
+
+    withName: 'VCF_TO_HAD' {
+        memory = '16 GB'
+        cpus = 1
+        time = '1h'
+    }
+
+    withName: 'PLOIDY_ANALYSIS' {
+        memory = '64 GB'
+        cpus = 4
+        time = '8h'  // Reduced for test run
+    }
+}
+
+executor {
+    $slurm {
+        queueSize = 50
+        submitRateLimit = '10 sec'
+    }
+}
+
+timeline {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_timeline.html"
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_report.html"
+}
+
+trace {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/execution_trace.txt"
+}
+
+dag {
+    enabled = true
+    file = "${params.outdir}/pipeline_info/pipeline_dag.svg"
+}
+
+
+##TEST SHELL SCRIPT
+
+#!/bin/bash
+#SBATCH --account=def-mcfarlas
+#SBATCH --time=12:00:00  # Increased for R package installation + analysis
+#SBATCH --mem=8G         # Increased for R package installation
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=nextflow_ploidy_test
+#SBATCH --output=ploidy_test_%j.out
+#SBATCH --error=ploidy_test_%j.err
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=lebla179@yorku.ca
+
+# Load only essential modules (R packages will be handled by the pipeline)
+module load StdEnv/2023
+module load gcc/12.3
+module load jags/4.3.2
+module load r/4.3.1
+module load java/17.0.6
+module load nextflow/25.04.6
+
+# Debug info
+echo "=== Job Started ==="
+echo "Date: $(date)"
+echo "Node: $(hostname)"
+echo "Job ID: $SLURM_JOB_ID"
+
+echo -e "\n=== Loaded Modules ==="
+module list
+
+echo -e "\n=== Software Versions ==="
+echo "Nextflow: $(nextflow -version)"
+echo "Java: $(java -version 2>&1 | head -1)"
+echo "R: $(R --version | head -1)"
+echo "JAGS: $(jags -version 2>&1 | head -1 || echo 'JAGS version check failed')"
+
+# Change to pipeline directory
+cd /home/lebla179/scratch/ploidy_test
+echo -e "\n=== Working Directory ==="
+echo "PWD: $(pwd)"
+echo "Files present:"
+ls -la
+
+# Run Nextflow pipeline (R packages will be installed automatically)
+echo -e "\n=== Starting Nextflow Pipeline ==="
+echo "Note: R packages will be installed automatically if not present"
+nextflow run main.nf -resume
+
+echo -e "\n=== Job Completed ==="
+echo "Date: $(date)"

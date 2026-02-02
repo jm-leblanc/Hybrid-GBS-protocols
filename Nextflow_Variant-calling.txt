@@ -1,0 +1,87 @@
+VARIANT CALLING WITH NEXTFLOW
+
+Based on Santiago's script, with slight optimization suggested by Seqera
+Edited again on July 11th to add allele depth annotation
+
+#!/bin/bash
+#SBATCH --account=def-mcfarlas
+#SBATCH --time=8:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --job-name=fescue_variants_with_AD
+#SBATCH --output=fescue_variants_with_AD_%j.out
+#SBATCH --error=fescue_variants_with_AD_%j.err
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=lebla179@yorku.ca
+
+# Load necessary modules
+module load StdEnv/2023
+module load gcc/12.3.1
+module load bcftools/1.19
+
+# Set variables 
+BAM_DIR="$SCRATCH/alignment/results/aligned"
+REF_GENOME="/home/lebla179/projects/def-mcfarlas/fescue/genome_index/GCF_019359855.2_Kyuss_2.0_genomic.fna"
+OUTPUT_VCF="fescue_all_variants_with_AD.vcf.gz"
+
+# Create output directory
+mkdir -p $SCRATCH/variant_calling_results_with_AD
+cd $SCRATCH/variant_calling_results_with_AD
+
+# Print job info
+echo "Job started at: $(date)"
+echo "Running on node: $(hostname)"
+echo "BCFtools version: $(bcftools --version | head -n1)"
+
+# Get ALL BAM files (instead of reading from subset file)
+BAM_FILES=$(find ${BAM_DIR} -name "*.bam" -not -name "*.bai" | sort | tr '\n' ' ')
+
+# Print the list of BAM files being processed
+echo "BAM files being processed:"
+echo "$BAM_FILES"
+
+# Run variant calling
+
+##> NOTE: the below code works perfectly fine if you don't need allele depth information in your VCF file. Commented out but leaving it in here so you can easily switch between the two
+## echo "Starting variant calling at: $(date)"
+## bcftools mpileup -Ou -f ${REF_GENOME} ${BAM_FILES} | \
+    ## bcftools call \
+    ## --multiallelic-caller \
+    ## --variants-only \
+    ## --output-type z \
+    ## --output ${OUTPUT_VCF}
+
+# Run variant calling with allele depth and other annotations
+echo "Starting variant calling with allele depth annotation at: $(date)"
+bcftools mpileup \
+    --annotate FORMAT/AD,FORMAT/ADF,FORMAT/ADR,FORMAT/DP,FORMAT/SP,INFO/AD,INFO/ADF,INFO/ADR \
+    --output-type u \
+    --fasta-ref ${REF_GENOME} \
+    ${BAM_FILES} | \
+bcftools call \
+    --multiallelic-caller \
+    --variants-only \
+    --output-type z \
+    --output ${OUTPUT_VCF}
+
+# Check if the output file was created and has content
+if [ -s "${OUTPUT_VCF}" ]; then
+    echo "Variant calling completed successfully. Output file: ${OUTPUT_VCF}"
+else
+    echo "Error: Variant calling failed or produced an empty file." >&2
+    exit 1
+fi
+
+# Index the output VCF
+echo "Indexing output VCF at: $(date)"
+bcftools index ${OUTPUT_VCF}
+
+# Generate stats
+echo "Generating VCF stats at: $(date)"
+bcftools stats ${OUTPUT_VCF} > fescue_variants_with_AD_stats.txt
+
+echo "Job completed at: $(date)"
+
+# Print resource usage
+echo "Resource usage summary:"
+sacct -j $SLURM_JOB_ID --format=JobID,JobName,MaxRSS,Elapsed

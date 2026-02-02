@@ -1,0 +1,145 @@
+RUNNING ENTROPY USING NEXTFLOW
+August 6th
+
+Okay I know I said I was just going to run it like Amanda had written out, but what she's done is basically a nextflow process anyways; she wrote a looping script to run each iteration of entropy back to back. But, Nextflow can do this in parallel
+
+
+
+Notes on the process:
+
+Amanda's script has a huge number of steps and long processing time, it seems because she uses an LDAK file in her script? The Shastry paper talks about how using k-clustering estimates to initialize your model can really cut down on the amount of time it takes to properly converge, and Sonia's script uses `-q $qkfile`, which is what I have. So, I'm going to try and use that and do it with a shorter amount of steps 
+
+The Entropy Command
+
+AUGUST 8TH UPDATES;
+
+I started off with a huge entropy model, 15000 steps with 125000 burnin,estimating 14 days for it to run. But, the node that is available for this length of jobs is currently down
+SO I checked Sonia's pipeline and the Shastry paper; Sonia did 60,000 steps with 20,000 burnin, Shastry did 30,000 with 10,000 burning
+- the reason for this seems to be that they use the qk files to help initialize the models; these help give the models a starting point that speeds up the process a lot.
+
+Sonia's job file estimated 21 days, but the Shastry paper said one run of 30,000 steps only took 24 hours.
+I have 3 k values and I'm doing 3 replicates each, which = 9 different replicates, which would estimate about 9 days.
+
+however, using Nextflow,I can launch all of these at the same time. Amanda and Sonia's scripts are just sbatch scripts which loop Entropy for every k and rep combination, each model runs after the previous one is completed. Since nextflow is doing them all at once, I am hoping that this will take less than the huge estimates Amanda and Sonia have
+
+# August 8-9
+Seqera was giving me a hugely complicated nextflow pipeline to run, with all of my parameters stored in a .config file and all sorts of crosslinksbetween the two. I simplified it, basically just using the config file to specify the SLURM specifications, and putting all of the ENTROPY specific arguments in the main.nf file.
+
+BUT THERE WAS AN ISSUE: I flagged -D as 1, which provides data used to calculate WAIC instead of DIC. I still don't fully understand the difference, but it means the output files don't work with Amanda's DIC scripts. 
+
+
+# August 10th
+- Entropy finished running a few of the reps using my simplified script, took about 2 full days. I tried playing around with some scripts and making some figures seqera gave me, but I don't know if I trust the output. I'm waiting until all the reps finish until analyzing
+
+# August 11th: 
+- First round of ENTROPY is done (using WAIC estimates) I tried modifying amanda's `check_k.sh` script to check the values of K and find the best fitting model, but there are a couple issues
+* Number one, because my script used -D 1 and therefore output data for WAIC estimation, I don't have "deviance" values in my output data (Amanda's script uses deviance to calculate the DIC values). Instead, I have "likdata", which seems to be a full likelihood matrix of every SNP x MCMC interaction, so I need to change the parameters accordingly when using `estpost.entropy` in the script
+
+
+# August 20th
+- ALL RUNS OF ENTROPY BEFORE THIS POINT USED AN INCORRECTLY FORMATTED MPGL FILE
+- I tried to use Shastry's VCF to MPGL conversion script, but it didn't work with my data. Possibly due to using a different program to generate the VCF file 
+- I ran a version that included modifications suggested by Seqera. This allowed the script to run, but unbeknownst to me, resulted in an incorrect MPGL file. It seems like it was apparently scrambling up all the extracted Genotype Likelihood data and not handling missing values very well
+- Apparently the issue with the original script is that it converts the VCF into a big intermediate matrix, then uses that to generate he MPGL and all the accessory files (qk files,etc.) 
+
+
+
+```bash
+stpost.entropy version 2.0 - December 2018
+
+Usage:   estpost.entropy [options] infile1.hdf5 infile2.hdf5
+-o     Outfile [default = postout.txt]
+-p     Name of parameter to summarize, e.g., 'q'
+-c     Credible interval to calculate [default = 0.95]
+-b     Number of additinal MCMC samples to discard for burn-in [default = 0]       
+-h     Number of bins for posterior sample histogram [default = 20]
+-s     Which summary to perform: 0 = posterior estimates and credible intervals    
+                                 1 = histogram of posterior samples
+                                 2 = convert to plain text
+                                 3 = calculate DIC or WAIC (based on input file)   
+                                 ('-p deviance' for DIC and '-p likdata' for WAIC) 
+                                 4 = MCMC diagnostics
+-v     Display estpost.entropy software version
+```
+
+Specifically, -p needs to be set to likdata, and -s is 3, which is the same as Amanda's script, but it calculates WAIC instead of DIC
+
+* Number two, the likdata is HUGE and makes the hdf5 files really massive and makes the calculation of WAIC very slow. So I needed to put the `check_k.sh` as an sbatch script to be run via slurm
+
+
+UNDERSTANDING WAIC
+- Running an MCMC means cycling through different iterations of my parameters; different admixture proportions (q) for each individual, different allele frequencies, different population assignments (z) etc. I cycled through 60,000 iterations. 20,000 of them were discarded, because they were likely bigger, less accurate jumps from the "true" parameters of the model. Then I thinned the remaining to just 2,000 iterations.
+I gave ENTROPY:
+* Genotype calls for each individual at each SNP (i.e. if it's homozygous, or hetero reference/alternate)
+* Which alleles exist (i.e. variant calls)
+* My number of individuals and variants
+
+ENTROPY then tries to estimate:
+* What the allele frequencies are in each population, depending on how many populations I'm telling it there are (k=2,3,4 etc.)
+* Admixture proportions (q) for each individual: what fraction of its genome comes from each population?
+* Population assignments for each allele: which population did each allele come from?
+
+WHAT WAIC IS DOING (This is an understanding from Seqera, so maybe double check)
+For each iteration, i.e. each combination of parameters, like "For a model with these parameters, if we look at SNP X in Individual Y, how likely is it that they would have that genotype if the true population matched these parameters?"
+
+*likdata is storing that information; the likelihood of the genotype of that SNP in that individual, for the current set of model parameters. 
+
+THEN WAIC: looks at the likelihood values across all 2000 iterations. So, let's say SNP #12,000 in individual 50, it looks at the likelihood estimates across all iterations
+* if there is a high amount of variation, it means there is more uncertainty
+* if there is low variation, it means less uncertainty and more confidence
+For all combinations of individuals and SNPs, if there is overall a high amount of uncertainty, it means that the model doesn't fit very well for that value of K 
+
+WHAT DIC DOES
+Essentially, looks at an overall deviance value for the model. i.e.
+*How well do the parameters in iteration 1 explain the data? How well do the parameters in iteration 2 explain the data?...etc., for every iteration
+* Then, it averages them to create an overall measure of deviance/uncertainty for the model for each value of k
+
+
+It seems like the main difference is that WAIC takes into account and rewards/penalizes uncertainty at the level of individual-SNP combinations. 
+
+A metaphor Seqera provided:
+DIC is like saying "We had 100 different students (iterations) take Test A, B, and C (different k values), and overall they got these average grade for each different test. Therefore, test B is the one we should use 
+
+WAIC is like saying: "We had 100 different students (iterations) take Test A, B, and C. For Test A, they did pretty good on most of the questions, but really terribly at some of the questions, for test B they did badly on most of the questions, but they did really well on some questions, for test C they did well across almost all of the questions, therefore test C is the best."
+
+i.e. it takes into account the performance of specific combinations of individual and SNPs
+
+Re-summarized by Seqera with a bit of added context:
+
+DIC approach:
+*"What's the overall average grade?"
+*Looks at total performance across all questions combined
+*Misses the details of which specific questions were hard/easy
+
+WAIC approach:
+*"How did they do on each individual question?"
+*Recognizes that some questions are consistently easy (low uncertainty)
+*Other questions are consistently hard (high uncertainty)
+*Penalizes models more for being uncertain about the "hard" questions
+
+Applied to your grass genetics:
+
+DIC says:
+*"k=2 model: Students averaged 75% overall"
+*"k=3 model: Students averaged 85% overall"
+*"k=4 model: Students averaged 82% overall"
+*→ Choose k=3
+
+WAIC says:
+*"k=2 model: Students did well on easy SNPs but terribly on hybrid-diagnostic SNPs"
+*"k=3 model: Students did well on most SNPs, including the tricky hybrid ones"
+*"k=4 model: Students did well overall but were inconsistent on some SNPs"
+*→ Choose k=3, and we're more confident because it handles the hard cases well
+
+Why this matters for hybrid detection:
+
+Some SNPs are "easy questions":
+*Clear population markers
+*Any reasonable k value handles them well
+*Low uncertainty across iterations
+
+Some SNPs are "hard questions":
+*Hybrid-diagnostic SNPs - the ones that distinguish pure species from hybrids
+*k=2 struggles with these (forces hybrids into parent categories)
+*k=3 handles these well (recognizes hybrids as distinct)
+*WAIC gives extra credit for getting these "hard questions" right

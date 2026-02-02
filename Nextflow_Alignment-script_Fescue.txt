@@ -1,0 +1,98 @@
+#!/usr/bin/env nextflow
+
+nextflow.enable.dsl = 2
+
+// Define input channels
+genome_ch = Channel.fromPath(params.genome)
+
+## genome_index_ch = Channel.fromPath("${params.genome_index_dir}/${params.genome_index_base}*.bt2l")
+	## Commented out because BWA uses the genome fasta prefix for its index files and 	## doesn’t require separate indexing paths. i.e. it can automatically find the 
+	## genome index files as long as they're in the same folder as the reference genome
+
+// Create a channel for input reads that can handle both single and paired-end
+## reads_ch = Channel
+     .fromFilePairs(params.input, size: -1)
+     .map { sample_id, files ->
+         def is_paired = files.size() > 1
+         return tuple(sample_id, is_paired, files)
+     }
+
+// Debug: View the contents of input channels
+reads_ch.view{ "Sample: $it" }
+genome_ch.view{ "Genome: $it" }
+genome_index_ch.view{ "Genome Index: $it" }
+
+// Align reads using Bowtie2 and sort with Samtools
+process ALIGN_AND_SORT {
+    tag "$sample_id"
+    publishDir "${params.outdir}/aligned", mode: 'copy'
+
+    container 'quay.io/biocontainers/bwa:0.7.17--hed695b0_7' 
+	## the original container in Santiago's script was: 'quay.io/biocontainers/mulled-v2-ac74a7f02cebcfcc07d8e8d1d750af9c83b4d45a:1744f68fe955578c63054b55309e05b41c37a80d-0'
+	## I replaced it with one that is specific to using bwa
+
+    input:
+    tuple val(sample_id), val(is_paired), path(reads)
+    each path(genome)
+    ## each path(index) ## commented out because bwa can find index files automatically
+
+    output:
+    tuple val(sample_id), path("${sample_id}.bam"), path("${sample_id}.bam.bai"), emit: bam
+
+    script:
+    def reads_command = is_paired ? "-1 ${reads[0]} -2 ${reads[1]}" : "-U ${reads[0]}"
+    """
+    bowtie2 --version
+    samtools --version
+
+    bowtie2 -p ${task.cpus} -x ${params.genome_index_dir}/${params.genome_index_base} ${reads_command} | \
+    samtools view -bS - | \
+    samtools sort -@ ${task.cpus} -o ${sample_id}.bam -
+    samtools index ${sample_id}.bam
+
+    # Basic error checking
+    if [ ! -s ${sample_id}.bam ]; then
+        echo "Error: ${sample_id}.bam is empty"
+        exit 1
+    fi
+    """
+}
+
+// Generate depth per position
+process SAMTOOLS_DEPTH {
+    tag "$sample_id"
+    publishDir "${params.outdir}/depth", mode: 'copy'
+
+    container 'quay.io/biocontainers/samtools:1.15--h1170115_1'
+
+    input:
+    tuple val(sample_id), path(bam), path(bai)
+
+    output:
+    path "${sample_id}_depth.txt"
+
+    script:
+    """
+    samtools --version
+
+    samtools depth ${bam} > ${sample_id}_depth.txt
+
+    # Basic error checking
+    if [ ! -s ${sample_id}_depth.txt ]; then
+        echo "Error: ${sample_id}_depth.txt is empty"
+        exit 1
+    fi
+    """
+}
+
+// Define the main workflow
+workflow {
+    // Align reads
+    aligned = ALIGN_AND_SORT(reads_ch, genome_ch, genome_index_ch)
+
+    // Generate depth
+    SAMTOOLS_DEPTH(aligned.bam)
+
+    // Implement checkpoint
+    aligned.bam.collect().map { checkpoint('alignment_complete') }
+}

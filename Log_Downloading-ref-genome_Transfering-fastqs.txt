@@ -1,0 +1,68 @@
+## PROCESS OF DOWNLOADING AND UPLOADING MY REFERENCE GENOME FOR GRASS ALIGNMENT
+## May 29, 2025
+
+---
+
+### Found a reference genome for *Lolium perenne* here:
+https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_019359855.2/
+
+
+### Downloading and transferring to Compute Canada
+
+Downloaded the file (it was zipped). Transferred it from my local computer to Compute Canada **without unzipping it**, using **Globus**.  
+(I tried using `scp` to transfer the file earlier it was giving me trouble.)
+
+Transferred from local computer into  `projects/fescue/ref_genome` 
+
+To unzip the file, I used `unzip`. It's a module that's already natively loaded onto Compute Canada. I checked this with:
+
+`unzip -v`
+
+Which told me the version and confirmed that `unzip` was already loaded.
+
+---
+
+## After Unzipping
+
+After unzipping within the `ref_genome` directory, a bunch of files came out of the folder. There was a `README` and other metadata, and **two versions of the genome**: a `GCA` and a `GCF`.
+
+* From what I’ve found, the `GCF` is preferable; it’s reviewed and curated by the NCBI team and should be more complete/accurate.
+
+* I transferred **just the GCF genome** (the `.fna` file) out of `ref_genome` and directly into the `fescue` directory.
+
+* I also renamed the `ref_genome` to `ref_genome_metadata`, so that if anyone wants to go in and see the additional information that came with the genome, it's still there.
+
+* I edited the original `README` file to add the context I explained above.
+
+---
+
+## TRANSFERRING FESCUE FASTQ FILES
+
+All of the samples were demultiplexed into `Peromyscus` (because the mouse and fescue samples were mixed together).  
+I want to copy only my Fescue files over into `/fescue/`.
+
+**Note:** My files don’t have `.fastq` extensions. I don’t know if that’s a problem yet, but I looked at the files using `head` and `wc`, and they’re formatted like `.fastq` files.
+* Follow-up: this wasn't an issue per se: the files still execute correctly, I just had to add some code to my alignment script to make sure they were recognized as .fastq files
+
+---
+
+### First Attempt
+
+From the `peromyscus` directory:
+
+`cp -r Fescue* ../fescue`
+
+This was to copy all files starting with `Fescue` into the `fescue` directory.
+
+However, my connection to Compute Canada was disconnected during the file transfer.  
+I wasn’t sure how many files made it over or if any were corrupted.
+
+So I deleted them all and tried again, this time from within the `fescue/` directory:
+
+`cp ../peromyscus/Fescue* .`
+
+i.e., copy everything from `peromyscus/` starting with `Fescue` into the current directory (`.`).
+
+First attempt was a success; all fastq files were copied successfully
+
+---

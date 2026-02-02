@@ -1,0 +1,90 @@
+AUGUST 22, 2025
+
+Running Big Q
+
+I successfully ran ENTROPY to generate small q values (i.e., admixture proportions). I have determined k=2 is my best fitting population structure, and now I want to determine the interspecific ancestry values (i.e., how much backcrossing is going on). 
+
+To do this, you just run ENTROPY again, but you adjust a couple parameters. 
+
+Basic usage for generating little q (admixture values) for k = 2 is:
+
+/home/lebla179/scratch/entropy/software/entropy \\ # summoning the entropy program
+        -i ${params.inputdir}/fescue_biallelic_snps_only.recode_FIXED.mpgl \\ # this is where the input MPGL is located
+        -n 2 \\ # Ploidy level of my samples
+        -k 2 \\ # Value of K to run 
+        -q qk2inds_FIXED.txt \\ # these are the initial admixture estimates generated when I did the MPGL file conversion. you pass them to ENTROPY to use as starting values for the MCMC algorithm
+        -l 60000 \\ # number of MCMC iterations (steps) to run
+        -b 20000 \\ # number of steps to discard (i.e., burn-in)
+        -t 20 \\ # thinning rate
+        -r \$RANDOM \\ # random seed generation method
+        -s 20 \\ # scalar for Dirichlet initialization of q (inversely proportional to variance)
+        -e 0.01 \\ # per-locus error rate if using read counts as input data
+        -o fescue_k${k}_rep${rep}.hdf5 # Output file format
+
+
+However, there are additional parameters to define that are not shown here because we're okay with using their default values. 
+
+These include
+-m [0/1] ## input format (0 = read counts; 1 = genotype likelihoods) [default=1]
+
+-w [0/1]  ## output includes allele frequencies? [0/1] [default=1]
+
+-D = 0  ## dic or waic [0/1] [default=0, DIC]
+
+And, important for our purposes:
+
+-Q [0/1] intra-/inter-specific ancestry (only available for diploids) [default=0]
+
+If we leave -Q undefined, it will by default generate little q values (i.e., admixture proportions). However if we set it to [1], it will instead generate big Q values (i.e., interspecific ancestry values).
+
+We can leave pretty much everything else unchanged, except, now that we have proper admixture proportions, we should pass that to ENTROPY through -q, instead of the rough admixture guesses that we got from our VCF file. 
+
+The issue here is that, our rough admixture estimates (i.e. from qk2_inds_FIXED.txt) look like this: 
+
+```bash
+[lebla179@login1 output_fixed]$ cat qk2inds_FIXED.txt 
+0.29763 0.70237
+2e-05 0.99998
+0.99976 0.00024
+0.99978 0.00022
+0.99948 0.00052
+0.00052 0.99948
+0 1
+0.07302 0.92698
+0.99997 3e-05
+0.00451 0.99549
+0.7938 0.2062
+0.01606 0.98394
+0.24393 0.75607
+```
+
+But the admixture proportions that ENTROPY generates look like this:
+
+```bash
+[lebla179@login1 qvalues]$ cat qvalues_k2.txt 
+param,mean,median,ci_0.950_LB,ci_0.950_UB
+q_ind_0_pop_0,0.448769,0.448876,0.425358,0.472979
+q_ind_1_pop_0,0.102286,0.102195,0.083259,0.121248
+q_ind_2_pop_0,0.904150,0.904221,0.886518,0.921601
+q_ind_3_pop_0,0.935337,0.935437,0.918387,0.951469
+q_ind_4_pop_0,0.904782,0.904792,0.886440,0.922788
+q_ind_5_pop_0,0.192072,0.191896,0.170937,0.214394
+q_ind_6_pop_0,0.300192,0.300341,0.262700,0.336439
+q_ind_7_pop_0,0.570793,0.570742,0.550660,0.590864
+...
+...
+...
+q_ind_0_pop_1,0.551231,0.551124,0.527021,0.574642
+q_ind_1_pop_1,0.897714,0.897805,0.878752,0.916741
+q_ind_2_pop_1,0.095850,0.095779,0.078399,0.113482
+q_ind_3_pop_1,0.064663,0.064563,0.048531,0.081613
+q_ind_4_pop_1,0.095218,0.095208,0.077212,0.113560
+q_ind_5_pop_1,0.807928,0.808104,0.785606,0.829063
+q_ind_6_pop_1,0.699808,0.699659,0.663561,0.737300
+q_ind_7_pop_1,0.429207,0.429258,0.409136,0.449340
+q_ind_8_pop_1,0.000429,0.000030,0.000000,0.003374
+```
+
+So, instead of having two columns that simply contain the admixture estimates for each population, we have admixture values for both populations in the same column, plus the mean, median, and confidence intervals. So we'll need to convert these values to a proper format before running ENTROPY again. 
+
+I used `qk_file_conversion.R` to grab the qvalues and put them into a format compatible with what ENTROPY -q is expecting

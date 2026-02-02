@@ -1,0 +1,105 @@
+// Improved config file
+// Updates the container used and improved BWA indexing
+// Improvements recommended by Sequera
+
+// Parameter definitions
+params {
+    // Input/Output paths
+    input = "/home/lebla179/projects/def-mcfarlas/fescue/fastq_files/*" 
+    genome = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index/GCF_019359855.2_Kyuss_2.0_genomic.fna"
+    genome_index_dir = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index"
+    bwa_index = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index"
+    outdir = "$SCRATCH/alignment/results"
+
+    // General resource parameters
+    max_memory = 16.GB
+    max_cpus = 4
+    max_time = 24.h
+}
+
+// Profiles
+profiles {
+    apptainer {
+        apptainer.enabled = true
+        apptainer.autoMounts = true
+    }
+    test {
+        process.cpus = 2
+        process.memory = '8.GB'
+        process.time = '1.h'
+    }
+}
+
+// Process configurations
+process {
+    executor = 'slurm'
+    clusterOptions = '--account=def-mcfarlas'
+
+    // BWA_INDEX process configuration
+    withName: BWA_INDEX {
+        cpus = 2
+        memory = '8.GB'
+        time = '2.h'
+        container = 'quay.io/biocontainers/mulled-v2-fe8faa35dbf6dc65a0f7f5d4ea12e31a79f73e40:66ed1b38d280722529bb8a0167b0cf02f8a0b488-0'
+    }
+
+    // ALIGN_AND_SORT process configuration
+    withName: ALIGN_AND_SORT {
+        cpus = 4
+        memory = '16.GB'
+        time = '20.h'
+        container = 'quay.io/biocontainers/mulled-v2-fe8faa35dbf6dc65a0f7f5d4ea12e31a79f73e40:66ed1b38d280722529bb8a0167b0cf02f8a0b488-0'
+    }
+
+    // SAMTOOLS_DEPTH process configuration
+    withName: SAMTOOLS_DEPTH {
+        cpus = 2
+        memory = '4.GB'
+        time = '2.h'
+        container = 'quay.io/biocontainers/samtools:1.15--h1170115_1'
+    }
+
+    // Fast Quality Control configuration
+    withName: FASTQC {
+    cpus = 2
+    memory = '4.GB'
+    time = '1.h'
+    container = 'quay.io/biocontainers/fastqc:0.11.9--0'
+    }
+}
+
+// Executor configurations
+executor {
+    queueSize = 100
+    submitRateLimit = '30 sec'
+}
+
+// Apptainer configurations
+apptainer {
+    enabled = true
+    autoMounts = true
+    cacheDir = "$SCRATCH/.apptainer"
+    pullTimeout = '1.h'
+}
+
+// Reporting configurations
+timeline {
+    enabled = true
+    file = "${params.outdir}/execution_timeline.html"
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/execution_report.html"
+}
+
+trace {
+    enabled = true
+    file = "${params.outdir}/execution_trace.txt"
+    fields = 'task_id,hash,native_id,process,tag,name,status,exit,module,container,cpus,time,disk,memory,attempt,submit,start,complete,duration,realtime,queue,%cpu,%mem,rss,vmem,peak_rss,peak_vmem,error_action'
+}
+
+// Error strategy
+process.errorStrategy = { task.attempt <= 3 ? 'retry' : 'finish' }
+process.maxRetries = 3
+process.retryDelay = '30.min'

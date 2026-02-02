@@ -1,0 +1,176 @@
+GBS TO PLOIDY
+
+Flying a bit solo here: For alignment, variant calling, filtering etc. I had existing scripts from others in the lab. GBS to ploidy is new, so I'm trying my best to figure it out using the Gompert paper and Seqera
+
+## Checking my existing VCF file to see if it's appropriate for GBS to ploidy
+
+GBS to Ploidy needs:
+* A filtered VCF file that was mapped to an aligned genome
+* Estimates of heterozygosity at each variant
+* Allele depth information
+
+# Check the header for FORMAT fields
+grep "##FORMAT" fescue_final_maf05_indiv70_var80.recode.vcf
+
+# Look at a few actual data lines to see what's available
+grep -v "^#" fescue_final_maf05_indiv70_var80.recode.vcf | head -5
+
+This creates readouts like `1/1:27,3,0`. The 1/1 (or 1/0 or 0/0) shows the homo- or heterozygosity at that variant. The other numbers are a measure of the confidence we have that the zygosity is correct
+
+## PAUSE TO RE-RUN VARIANT CALLING WITH ALLELE DEPTH
+
+July 10th, 2025: After examining my VCF file, I determined that I don't have the necessary information to run GBS to ploidy; it needs variant depth information, which was not generated when I called variants the first time. I will need to run it again using an adjusted code. 
+
+Adjustments to my variant calling code based on this forum post: https://www.biostars.org/p/377842/
+
+## After re-running variant calling and filtering steps
+
+My new VCF file is called `fescue_all_variants_with_AD.vcf.gz`, and is in its own directory called `../scratch/variant_calling_results_with_AD/`
+
+I ran: 
+```bash
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT[\t%AD]\n' fescue_all_variants_with_AD.vcf.gz | head -10
+```
+This returns records that look something like
+
+```bash
+NC_067244.2     19111   C       A       0,0     0,0     0,2     0,0     0,1  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,2     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,1     0,0     1,0,   0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,3 
+```
+
+This shows: 
+* the **Chromosome** (`NC_067244.2`)
+* the **position on that chromosome** (`19111`)
+* the **Reference Allele** (i.e., what the allele is on the reference genome, in this case, `C`)
+* the **Variant Allele** (i.e. the variant found in my sample, in this case, `A`
+* and then the depth reads for those alleles for each sample
+  * e.g., `(0, 0)` in the first position means that Sample 1 has 0 reads for C and 0 reads for A at that position. but something like `(0,3)` means that the individual has 3 reads for A at that position
+
+So it looks like we have the information necessary to run gbs2ploidy. 
+
+I ran the same filtering steps as before, and this allele depth information was retained in the filtered VCF, so I'm proceeding.
+
+New, filtered VCF file with allele depth information:
+
+```bash
+fescue_mm80_indiv70_maf_05_with_AD.recode.vcf
+```
+
+## Running initial steps in an interactive R session
+
+This could be intensive, so it's probably better off run as a batch script, but there are some things I want to check before proceeding with a batch job
+
+One thing that is required for gbs2ploidy is for your input file to be in **Heterozygous Allele Depth (HAD)** format. However, gbs2ploidy does not include this function, so we use **vcf2ploidy** to convert our file:
+
+```bash
+https://github.com/dandewaters/vcf2ploidy
+```
+
+# Load up modules for an interactive R session
+
+**NOTE:** gbs2ploidy requires jags to function properly, and jags is dependent on the SPECIFIC versions of StdEnv and gcc outlined below. I don't know why, just install these versions in this order
+
+```bash
+module load StdEnv/2020
+module load gcc/9.3.0
+module load jags/4.3.0
+```
+
+# Then load and start R
+```bash
+module load r/4.3.1  
+ 
+R
+```
+# **NOTE:** Remember that you are now in an R environment, not a shell. So commands are different. e.g. 
+
+```bash
+pwd --> getwd()
+ls --> list.files()
+cd --> setwd("path/to/folder")
+```
+
+# Install required packages
+
+Once inside R, install the required packages:
+
+```bash
+install.packages("rjags", repos = "https://cloud.r-project.org")
+install.packages("gbs2ploidy", repos = "https://cloud.r-project.org")
+```
+
+**IMPORTANT:** Make sure you specify the repository with `repos = "https://cloud.r-project.org"`. Otherwise, R will cycle through every available repository trying to install the packages, and never actually install them
+
+For **vcf2ploidy** you need access to the specific GitHub repository:
+
+```bash
+install.packages("remotes", repos = "https://cloud.r-project.org")
+remotes::install_github("dandewaters/vcf2ploidy")
+```
+**NOTE:** The above package has a bunch of dependencies, and those dependencies have their own dependencies that will also be installed automatically. This takes a lot of time. You may want to run this as a batch job rather than an interactive job. Apparently, once you install it once, you won't have to install it again if they're stored in a personal library. 
+
+# Load packages
+```bash
+library(rjags)
+library(vcf2ploidy)
+library(gbs2ploidy)
+```
+
+## Convert VCF to HAD
+
+# First, navigate to the spot where my VCF file is located
+
+```bash
+setwd("/scratch/lebla179/vcftools_filtering_with_AD/")
+```
+
+# Use `read_vcf` to convert the VCF to a readable dataframe
+
+This function returns a data frame table of the VCF data with the metadata and the first 9 columns removed.
+
+```bash
+read_vcf("fescue_mm80_indiv70_maf_05_with_AD.recode.vcf")
+```
+
+# Convert to HAD with `vcf2had` 
+
+I mistakenly used read_vcf to convert the file into a separate object, instead of just running it as a function (i.e. I went vcf_file <- read_vcf()), I think you're just supposed to run it and see what comes out, and that can help inform this next step
+```
+
+QUICK AND DIRTY NOTES BECAUSE I'M REAL TIRED
+
+tried to convert ot HAD in an interactive session but it was taking forever so I'm setting it up as a batch job
+[lebla179@cdr1019 scratch]$ mkdir -p gbs2ploidy ## make a new directory for gbs2ploidy stuff
+[lebla179@cdr1019 scratch]$ cd gbs2ploidy/
+[lebla179@cdr1019 gbs2ploidy]$ ln -s ../vcftools_filtering_with_AD/fescue_mm80_indiv70_maf_05_with_AD.recode.vcf . # make a link to my vcf file.
+
+
+make an r file to execute
+
+library(rjags)
+library(vcf2ploidy)
+library(gbs2ploidy)
+
+
+results <- vcf2ploidy(
+  filename = "fescue_mm80_indiv70_maf_05_with_AD.recode.vcf",
+  remove_double_hets = FALSE, ## I don't fully understand if this should be true or false so I'll do it as true first
+  props = c(0.125, 0.17, 0.25, 0.33, 0.375, 0.5, 0.625, 0.67, 0.75, 0.83, 0.875), ## these are all the proportions you could get if I had 4n, 6n and 8n
+  mcmc.nchain = 2,
+  mcmc.steps = 10000,
+  mcmc.burnin = 1000,
+  mcmc.thin = 2,
+  train = FALSE,
+  nclasses = 3,    # 4n, 6n, 8n
+  pcs = 1:2
+)
+
+saveRDS(results, file = "vcf2ploidy_results.rds")
+
+
+
+###GET MY UPDATED SHELL AND R SCRIPTS FROM COMPUYTE CANADA
+
+I'm trying to just run vcf2ploidy, which rolls everything into one and converts my vcf to had and then runs gbs2ploidy on it. let's see if it works
+
+
+

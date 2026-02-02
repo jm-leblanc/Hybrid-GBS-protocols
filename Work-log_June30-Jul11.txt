@@ -1,0 +1,5 @@
+WORK LOG:
+
+- Week of June 30-July 4: aligned genome and ran variant calling once
+July 10th: ran variant filtering, realized that my VCF didn't have allele depth information
+July 11th: re-ran variant calling with updated script

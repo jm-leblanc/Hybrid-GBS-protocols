@@ -1,0 +1,293 @@
+# Absolute Dummies Guide to Using Compute Canada and shell language for doing Bioinformatics
+
+This is my brain-dump of notes, organized and polished up with the help of ChatGPT. I have reviewed and edited all the content and stand by it. 
+
+# 0.0 Running Commands in the Shell
+
+First things first, let's talk about working with shell commands.
+
+Instead of interacting with a shiny user interface to run programs or edit and move files, you're essentially just having a conversation with your computer about what you'd like it to do.
+
+You type in a command and press Enter, the shell reads what you typed, tries to understand it, and runs it.
+
+Most commands follow a basic structure:
+
+`command -option(s) target`
+
+For example:
+
+```bash
+ls -l samples/
+```
+
+This runs `ls` (list files), with the `-l` option (long format), targeting the folder named `foldername/`.
+
+* Options (also called flags) usually start with a dash, like `-l` or `-h`. These modify the behavior of the command.
+
+* The final part (if needed) is the thing the command is acting on. That could be a file, a folder, or even a URL, depending on the command.
+
+Don’t worry about memorizing every option. You’ll pick them up as you go. When in doubt, try `command --help` to see what options are available.
+
+---
+
+## 1. Logging In and Two-Factor Authentication
+
+To log in to Compute Canada, open a terminal and ssh to their servers (we use Cedar, but there are others):
+
+```bash
+ssh user123@cedar.computecanada.ca
+```
+
+* Enter your password when prompted (the keypresses won't show up, just trust the process and hit "Enter" afterwards
+* You'll be prompted to choose a method of 2FA. My only method is Duo, so I hit `1` for a Duo push and press enter, then follow the prompt on my phone.
+
+This gets you into the Compute Canada "lobby", formally known as the **login node**
+
+**NOTE:** The login node is fine if you're doing very small tasks like data/file management, editing etc., but if you're doing anything more intensive you'll want access to a dedicated computer node. See Section 4 for more details. 
+
+---
+
+## 2. Navigating file systems
+
+Your full location within the system is within a series of nested directories or folders, like `/home/cedar/user/projects/myfolder`. You can navigate around using **absolute paths** (full file path from the root), or **relative paths** (from wherever you currently are). 
+
+For example, my full geographical location might be "/Canada/Ontario/Toronto/York University/Life Sciences Building/Room 123"
+
+* In some cases (e.g. if were ordering a package from England), it would be necessary to specify every level of my location (the Absolute Path) 
+* In other cases (e.g. if I were telling a colleague where my office is), it would be fine to just tell them "Life Sciences Building, Room 123" (the Relative Path)
+
+Similarly, if you're already in `/home/user/projects/`, any command you run will treat `projects` as your starting point. 
+
+
+### 2.1 Checking your current location
+
+If you get lost, at any time you can access your full location (absolute path) with:
+
+```pwd  
+```
+
+### 2.2 Moving through directories
+
+`cd` stands for "change directory", and is used to--you guessed it--change your directory.
+
+You COULD use your absolute path to specify where you'd like to go. e.g.:
+
+```cd /home/user/projects/folder1```
+Will set your location to `folder1` no matter where you are in the system. 
+
+But, if you'd like to save time, here are some shortcuts which use your relative location:
+
+```
+cd foldername/     # Go into a folder in your current directory
+cd ../             # Go up one level (to the parent directory)
+cd ../../          # Go up two levels (can be chained up as many levels as you like)
+cd ~               # Shortcut back to your home directory
+```
+
+The `..` notation is super useful when moving around without typing full paths. Think of it like breadcrumb hopping back up the tree. Actually, definitely DON'T think of it that way--it's a terrible metaphor that ChatGPT came up with, but I think it's so hilarious that I left it in. 
+
+The `..` notation is actually just useful shorthand for your parent directory. So, if you're in `/home/user/projects/GBS`, `..` refers to `/home/user/projects` 
+
+
+### 2.3 Seeing what's in the directories
+
+So, how do you know which directories and files are available to you? 
+
+`ls` will list the contents of your current directory. It can also be modified to access other directories:  
+
+```
+ls             		# Lists contents of the current directory (folders, files etc.)
+ls /projects/docs/  	# Lists contents of the "docs" folder within "projects"
+ls ../docs/   		# Lists contents of a different folder in your parent directory
+```
+
+You can also use:
+
+```bash
+ls -lht          
+```
+To have the contents listed in long format with file sizes, timestamps, etc. 
+
+---
+
+ENDED HERE
+
+
+## 3. Working with and modifying files
+
+
+
+### 3.1 Copy Files
+
+```bash
+cp folder1/data/barcodes.txt .        # Copy to current directory
+cp folder1/data/barcodes.txt ../      # Copy to parent directory
+```
+
+### 3.2 Move or Rename Files
+
+```bash
+mv file1.txt folder2/                 # Move to folder2
+mv oldname.txt newname.txt            # Rename file
+```
+
+Adding a trailing `/` for folders can help make things more readable.
+
+### 3.3 Delete Files and Folders
+
+```bash
+rm file.txt               # Delete a file
+rm -r folder_name/        # Delete a folder and everything in it
+```
+
+### 3.4 Stop a Command Midway
+
+```bash
+Ctrl + C   # Interrupts a command in progress
+```
+
+mkdir
+you can make multiple directories within one another and create multiple folders within them at the same time
+
+mkdir -p $SCRATCH/alignment/{fastq_files,genome_index,results}
+
+this will make folders called fastq_files,genome_index, and results within a new directory called alignment, within scratch
+* Note, $SCRATCH is being used to make sure that it directs to the actual scratch directory, rather than for example, a different folder just named "scratch" you can check what the name of your scratch directory is called with echo $SCRATCH
+
+### 3.something Making new files
+- use nano to open up and edit files
+
+you can also do
+cat > quick_qc_check.sh << 'EOF'
+file contents here, whatever script you want
+EOF
+
+to generate a document without having to open up the editor
+---
+
+## 4. Running Jobs on Compute Canada
+
+Don't do heavy lifting on the login node.
+
+helpful resources from the U of C, because I find Compute Canada's resources are not that straightforward:
+
+* https://rcs.ucalgary.ca/General_Cluster_Guidelines_and_Policies <- general overview of what jobs can be done in the login vs. salloc and sbatch
+* https://rcs.ucalgary.ca/WDF_Cluster_Guide <- specifics about sbatching
+
+### 4.1 Interactive Jobs
+
+Use this when you want to actively work on a compute node:
+
+```bash
+salloc --time=01:00:00 --cpus-per-task=4 --mem=8G
+```
+
+Once the node is allocated, you're free to run commands interactively.
+
+### 4.2 Batch Jobs (Scripted)
+
+Create a shell script (e.g. `job.sh`):
+
+```bash
+#!/bin/sh				## the "shebang" (#!) indicates "run this file, using the interpreter at /this/filepath"  
+#SBATCH --account=def-mcfarlas		## the project account your job will be charged to (here I'm using Eryn's account)
+#SBATCH --time=0-06:00:00		## time requested
+#SBATCH --nodes=1			## nodes requested
+#SBATCH --mem=4000
+#SBATCH --ntasks-per-node=1
+#SBATCH --mail-user=lebla179@yorku.ca	## your email
+#SBATCH --mail-type=END
+
+module load StdEnv/2020
+module load fastqc/0.11.9
+
+fastqc data/sample.fastq -o qc_reports/
+```
+
+Then submit it:
+
+```bash
+sbatch job.sh
+```
+
+### 4.3 Monitoring Job Status
+
+```bash
+squeue -u user123     # See current jobs
+sacct -j <job_id>     # See finished job details
+```
+
+---
+
+## 5. Using Modules (Software Environment)
+
+Modules let you load pre-installed software.
+
+1. Start by loading the base environment:
+
+   ```bash
+   module load StdEnv/2020
+   ```
+2. Search for available modules:
+
+   ```bash
+   module spider bwa
+   ```
+3. Load what you need:
+
+   ```bash
+   module load bwa/0.7.17
+   ```
+
+If you're unsure what’s available:
+
+```bash
+module avail
+```
+
+Note: some tools require a specific `StdEnv` version to work.
+
+---
+
+## 6. Copying Files to Compute Canada from Your Computer
+
+To transfer files from your local machine:
+
+```bash
+scp /path/to/local/file.fastq user123@cedar.computecanada.ca:~/projects/data/
+```
+
+If 2FA is buggy, log in via SSH first, then try `scp` again.
+
+Still having trouble? Try `rsync` instead:
+
+```bash
+rsync -avz -e ssh localfile.fastq user123@cedar.computecanada.ca:~/projects/data/
+```
+
+---
+
+## 7. Working with FASTQ Files
+
+Each read in a FASTQ file = 4 lines. So to count reads:
+
+```bash
+wc -l data/sample.fastq
+# Divide that number by 4 to get total reads
+```
+
+This command can take a while—especially for large files.
+
+---
+
+## 8. Running FastQC for Quality Checks
+
+```bash
+module load fastqc/0.11.9
+fastqc data/sample.fastq -o qc_reports/
+ls qc_reports/   # Look for your HTML report
+```
+
+---
+
+*You made it to the end. High five. You're now officially less confused than you were before.*

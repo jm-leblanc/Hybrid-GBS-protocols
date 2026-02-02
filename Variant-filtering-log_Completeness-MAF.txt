@@ -1,0 +1,339 @@
+# VARIANT FILTERING: Round 1, filtering for completeness, missing data, and minor allele frequency
+
+Started July 11, 2025
+Edited August 7, 2025
+
+This document acts as a guide and a log for the variant filtering steps I applied to my called variants 
+
+---
+
+## Getting Started
+
+I ran variant calling and filtering once before, but realized my VCF was missing the allele depth information that gbs2ploidy requires to assign ploidy likelihoods. 
+
+Ran variant calling again with an updated script, and now I'm filtering the dataset in the same way.
+
+
+## Verifying the presence of allele depth information
+
+My new VCF file is called `fescue_all_variants_with_AD.vcf.gz`, and is in its own directory called `../scratch/variant_calling_results_with_AD/`
+
+I ran: 
+```bash
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT[\t%AD]\n' fescue_all_variants_with_AD.vcf.gz | head -10
+```
+This returns records that look something like
+
+```bash
+NC_067244.2     19111   C       A       0,0     0,0     0,2     0,0     0,1  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,2     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,1     0,0     1,0,   0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0     0,0  0,0      0,0     0,3 
+```
+
+This shows: 
+* the **Chromosome** (`NC_067244.2`)
+* the **position on that chromosome** (`19111`)
+* the **Reference Allele** (i.e., what the allele is on the reference genome, in this case, `C`)
+* the **Variant Allele** (i.e. the variant found in my sample, in this case, `A`
+* and then the depth reads for those alleles for each sample
+  * e.g., `(0, 0)` in the first position means that Sample 1 has 0 reads for C and 0 reads for A at that position. but something like `(0,3)` means that the individual has 3 reads for A at that position
+
+So it looks like we have the information necessary to run gbs2ploidy. I will proceed with the filtering steps as I did before. Below code is essentially the same, but updated with my new file names
+
+## Filtering my VCF file
+
+Beginning the filtering process by figuring out how many markers show up in **ALL 112** of my samples. I adapted this pipeline from Amanda Meuser's code, with suggestions from Seqera.
+
+---
+
+## Setup: Using `vcftools` to Filter Variants
+
+I made a workspace in scratch specifically for variant filtering:
+
+```bash
+mkdir -p vcftools_filtering
+cd vcftools_filtering
+```
+
+And created a symbolic link to my big VCF file (instead of moving the whole thing to a new directory):
+
+```bash
+ln -s ../variant_calling_results/fescue_all_variants.vcf.gz .
+```
+
+(Note: the period at the end means "put the link *here*.")
+
+### IMPORTANT NOTE:
+
+> IF YOU DO NOT LOAD A `StdEnv` AND `vcftools` EVERY TIME YOU START A NEW SESSION, THE SCRIPTS WILL FREEZE. You won't get an error or a helpful message, it will just sit there pretending to work until you give up and kill it.
+
+```bash
+module load StdEnv/2023
+module spider vcftools # Check the latest version of vcftools and load that one
+module load vcftools/0.1.16
+```
+
+Checking what’s actually in my VCF:
+
+```bash
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz # I use --gzvcf here because the vcf file is zipped
+```
+
+Result:
+
+* 112 individuals (grass samples)
+* 1,538,878 variants (loci)
+
+This is the same as when I first ran variant calling, so the additional annotation steps didn't mess anything up
+---
+
+## Testing Variant Completeness Thresholds
+
+Checking how many variants are retained when we set different thresholds (i.e., how many samples the variant must be present in)
+
+### Background Info:
+
+* `--max-missing` sets how "complete" a site needs to be across all individuals. (e.g. `--max-missing 1.0` = variant must be present in *all* 112 samples, `--max-missing 0.75` = variant must be present in 75% of the samples
+* `--mac` = Minor Allele Count. For example, if 83/100 individuals have G and 17/100 have T, then MAC = 17.
+
+  * Setting `--mac 3` means: keep variants that show up at least 3 times (to avoid keeping variants that show up once or twice as flukes)
+* `--minQ 20` = only keep variants with a quality score of 20 or higher (which means \~99% confidence the variant is real).
+
+### I Ran All of This at Once:
+(Checks to see how many variants are retained at different thresholds)
+
+It will take a little while to run all of them, around 20 seconds for each level
+
+```bash
+echo "=== TESTING COMPLETENESS THRESHOLDS ==="
+
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz --max-missing 1.0 --mac 3 --minQ 20
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz --max-missing 0.9 --mac 3 --minQ 20
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz --max-missing 0.8 --mac 3 --minQ 20
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz --max-missing 0.7 --mac 3 --minQ 20
+```
+
+### Results:
+
+I got the same results as the first time I did variant filtering
+
+* **100% completeness**:
+
+  * Individuals retained: 112/112
+  * Sites retained: 0/1,538,878 (i.e. no variants are present in all of my samples)
+* **90% completeness**:
+
+  * Sites retained: 3,006
+* **80% completeness**:
+
+  * Sites retained: 44,244
+* **70% completeness**:
+
+  * Sites retained: 59,702
+
+> Note: I'm only filtering **variants** so far: no individuals have been removed yet. All 112 individuals are still present, I will filter those at a later step
+
+---
+
+## The Pokémon Card Analogy 
+
+For additional context/explanation of what this variant filtering step is doing:
+
+Imagine 100 people with Pokémon card collections (in my case, the people are my 112 grass samples and the Pokémon card collections are different collections of variants).
+
+If I ran a survey to see which cards show up in at least 80% of the collections, I might end up with a list of 500 different cards. BUT that doesn't mean that all 100 people own all 500 cards. It might look like:
+
+* Card #1: owned by 85 people
+* Card #2: owned by 92 people
+* Card #3: owned by 80 people
+* ... etc.
+
+**Key Point:**
+
+* No *one* person has all 500 cards.
+* But each card is owned by *at least* 80 people.
+
+Same with variants:
+
+* If I get 44,000 variants after filtering at 80% completeness:
+
+  * Variant #1 might be present in 105 samples
+  * Variant #2 in 92 samples
+  * etc.
+
+* It DOESN'T MEAN that a random group of 80% of my samples will contain all of those 44,000 variants, it means that each variant is present in at least 80% of the samples
+---
+
+## Filter to Create an 80%--max-missing VCF File
+
+```bash
+vcftools --gzvcf fescue_all_variants_with_AD.vcf.gz \
+    --max-missing 0.8 --mac 3 --minQ 20 \
+    --recode --recode-INFO-all \
+    --out fescue_mm80_with_AD 
+```
+
+This gives me:
+**`fescue_mm80_with_AD.recode.vcf`**
+
+---
+
+## Individual Quality Filtering: Removing incomplete samples
+
+I have set my variant thresholds, now I want to see how complete each individual sample is (i.e. how many of the filtered variants is each sample missing?).
+
+```bash
+vcftools --vcf fescue_mm80_with_AD.recode.vcf \
+    --missing-indv \
+    --out fescue_mm80_indiv70
+```
+
+This generates an .imiss file:
+
+```bash
+head fescue_mm80_indiv70.imiss 
+```
+
+### Get a Summary of how incomplete each individual Is:
+
+Run all of this at once to get a breakdown of how many individuals are at each level of incompleteness:
+
+```bash
+echo "=== INDIVIDUAL MISSINGNESS SUMMARY ==="
+awk 'NR>1 {
+    if($5 >= 0.95) very_high++
+    else if($5 >= 0.90) high++
+    else if($5 >= 0.80) medium_high++
+    else if($5 >= 0.70) medium++
+    else if($5 >= 0.50) low_medium++
+    else low++
+    total++
+}
+END {
+    print "Very high missing (≥95%): " very_high+0 " individuals"
+    print "High missing (90-95%): " high+0 " individuals"
+    print "Medium-high missing (80-90%): " medium_high+0 " individuals"
+    print "Medium missing (70-80%): " medium+0 " individuals"
+    print "Low-medium missing (50-70%): " low_medium+0 " individuals"
+    print "Low missing (<50%): " low+0 " individuals"
+    print "Total: " total " individuals"
+}' fescue_mm80_indiv70.imiss
+```
+
+Which results in:
+
+```bash
+=== INDIVIDUAL MISSINGNESS SUMMARY ===
+Very high missing (≥95%): 5 individuals
+High missing (90-95%): 2 individuals
+Medium-high missing (80-90%): 7 individuals
+Medium missing (70-80%): 1 individuals
+Low-medium missing (50-70%): 0 individuals
+Low missing (<50%): 97 individuals
+Total: 112 individuals
+```
+
+
+### Check how many samples would be removed depending on where I set my "completeness" threshold:
+
+```bash
+echo "=== INDIVIDUAL REMOVAL SUMMARY BY THRESHOLD ==="
+echo "Threshold | Individuals_Removed | Individuals_Remaining | Percent_Remaining"
+echo "----------|--------------------|------------------------|------------------"
+
+for threshold in 0.95 0.90 0.85 0.80 0.75 0.70 0.65; do
+    removed=$(awk -v thresh=$threshold 'NR>1 && $5 > thresh {count++} END {print count+0}' fescue_mm80_indiv70.imiss)
+    remaining=$((112 - removed))
+    percent_remaining=$(echo "scale=1; $remaining * 100 / 112" | bc)
+    threshold_percent=$(echo "scale=0; $threshold * 100" | bc)
+
+    printf "%8s%% | %18s | %22s | %15s%%\n" $threshold_percent $removed $remaining $percent_remaining
+done
+```
+
+Which results in:
+
+```bash
+=== INDIVIDUAL REMOVAL SUMMARY BY THRESHOLD ===
+Threshold | Individuals_Removed | Individuals_Remaining | Percent_Remaining   
+----------|--------------------|------------------------|------------------   
+> done
+   95.00% |                  5 |                    107 |            95.5%
+   90.00% |                  7 |                    105 |            93.7%
+   85.00% |                 13 |                     99 |            88.3%    
+   80.00% |                 14 |                     98 |            87.5%
+   75.00% |                 14 |                     98 |            87.5%    
+   70.00% |                 15 |                     97 |            86.6%
+   65.00% |                 15 |                     97 |            86.6%
+```
+
+---
+
+## Removing Individuals with >70% Missing Data
+
+I will filter to remove any individuals with >70% missing data. It's more stringent than Amanda's 95%, and a little looser than Cassandre’s 60%, but it keeps **97 samples** and filters out the worst offenders.
+
+```bash
+awk 'NR>1 && $5 > 0.70 {print $1}' fescue_mm80_indiv70.imiss > bad_individuals_70.txt
+
+vcftools --vcf fescue_mm80_with_AD.recode.vcf \
+    --remove bad_individuals_70.txt \
+    --recode --recode-INFO-all \
+    --out fescue_mm80_indiv70_with_AD
+```
+
+---
+
+## Final Step: Minor Allele Frequency Filtering (MAF)
+
+We do a final filtering step for minor allele frequency. We already did this in our earlier step, but this now catches any variants that fall below the threshold now that we've removed incomplete individuals.
+
+Reminder: This filters out variants that are rare in the dataset and probably not useful. 
+
+0.05 seems like a common threshold, but just to see what other thresholds might do, I tested two others:
+
+```bash
+echo "=== MAF FILTERING PREVIEW ==="
+echo "MAF Threshold | Variants Kept"
+echo "--------------|--------------"
+
+variants_001=$(vcftools --vcf fescue_mm80_indiv70_with_AD.recode.vcf --maf 0.01 2>&1 | grep "After filtering, kept" | awk '{print $4}')
+echo "     0.01     |   $variants_001"
+
+variants_005=$(vcftools --vcf fescue_mm80_indiv70_with_AD.recode.vcf --maf 0.05 2>&1 | grep "After filtering, kept" | awk '{print $4}')
+echo "     0.05     |   $variants_005"
+
+variants_010=$(vcftools --vcf fescue_mm80_indiv70_with_AD.recode.vcf --maf 0.10 2>&1 | grep "After filtering, kept" | awk '{print $4}')
+echo "     0.10     |   $variants_010"
+```
+
+Result:
+
+* MAF 0.01 → 44,189 variants
+* MAF 0.05 → 24,932 variants
+* MAF 0.10 → 16,561 variants
+
+MAF 0.05 retains a good number of variants, and it's not as permissive as MAF 0.01 or as strict as 0.10
+
+# Final filtering with MAF = 0.05:
+
+```bash
+vcftools --vcf fescue_mm80_indiv70_with_AD.recode.vcf \
+    --maf 0.05 \
+    --recode --recode-INFO-all \
+    --out fescue_mm80_indiv70_maf_05_with_AD
+```
+
+---
+
+## Log of Decisions
+
+* After running the max-missing at different levels, there's a big jump between 90% and 80%; it goes from like 3,000 variants to 44,000 or so. This seemed this a good place to make the cutoff, I don't need more variants than that, and retaining 80% is great
+* After looking at individual missingness in my samples:
+	* Striking a balance between Cassandre's paper (Pyne et al 2025/ novel sex-associated genomic region) with a filtering threshold of 60% incomplete, and Amanda, who set hers to 95%
+* MAF filtering, decided to go with 5%, because that is what's quoted in Amanad's work and Cassandre's. Leaves us with 24932 variants still
+
+
+Final file: `fescue_mm80_indiv70_maf_05_with_AD.recode.vcf`
+
+---
+
+**Done for now!**

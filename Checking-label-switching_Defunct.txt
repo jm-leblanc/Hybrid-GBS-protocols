@@ -1,0 +1,71 @@
+AUGUST 18th 2025
+
+AUGUST 21st: Turns out that I had an improperly formatted MPGL file that was causing the issues with my entropy runs and estpost analysis. I have since fixed the MPGL file and run ENTROPY again, but I'll keep this here for the sake of reference
+
+Post-estpost breakdown
+
+I ran a bunch of estpost analaysis and my results are turning out weird. I'm going to try and take a look at stuff individually to see where it's going weird
+
+
+
+it seems like there's some label switching going on
+
+I ran q estimates on each rep individually rather than together
+
+# Extract K=2 ancestry estimates for each replicate
+echo "Extracting K=2 ancestry estimates..."
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k2_rep1.hdf5 -o k2_rep1_ancestry.txt
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k2_rep2.hdf5 -o k2_rep2_ancestry.txt
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k2_rep3.hdf5 -o k2_rep3_ancestry.txt
+
+# Extract K=4 ancestry estimates for each replicate
+echo "Extracting K=4 ancestry estimates..."
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k4_rep1.hdf5 -o k4_rep1_ancestry.txt
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k4_rep2.hdf5 -o k4_rep2_ancestry.txt
+/home/lebla179/scratch/entropy/software/estpost.entropy -p q -s 0 /home/lebla179/scratch/entropy_k_2-9/results/fescue_k4_rep3.hdf5 -o k4_rep3_ancestry.txt
+
+and when looking at k=2, I got 
+
+=== K=2 Rep 1 - First 10 individuals ===				
+param	mean	median	ci_0.950_LB	ci_0.950_UB
+q_ind_0_pop_0	0.39716	0.397075	0.388154	0.406402
+q_ind_1_pop_0	0.544952	0.544954	0.536359	0.553247
+q_ind_2_pop_0	0.129605	0.129573	0.124288	0.135399
+q_ind_3_pop_0	0.670985	0.671089	0.663834	0.67771
+q_ind_4_pop_0	0.777145	0.777224	0.770823	0.783514
+q_ind_5_pop_0	0.530213	0.530244	0.522581	0.537724
+q_ind_6_pop_0	0.611308	0.611291	0.603811	0.619247
+q_ind_7_pop_0	0.364109	0.364164	0.355714	0.372343
+q_ind_8_pop_0	0.484832	0.484825	0.476288	0.493456
+q_ind_9_pop_0	0.61439	0.614444	0.606728	0.621832
+q_ind_10_pop_0	0.480686	0.48065	0.473093	0.488662
+=== K=2 Rep 2 - First 10 individuals ===				
+param	mean	median	ci_0.950_LB	ci_0.950_UB
+q_ind_0_pop_0	0.603623	0.603476	0.596032	0.612143
+q_ind_1_pop_0	0.454252	0.454348	0.445529	0.462325
+q_ind_2_pop_0	0.870423	0.87045	0.864938	0.875593
+q_ind_3_pop_0	0.328459	0.3284	0.320951	0.335675
+q_ind_4_pop_0	0.222711	0.222687	0.216114	0.229139
+q_ind_5_pop_0	0.469587	0.469628	0.462052	0.477205
+q_ind_6_pop_0	0.388063	0.388083	0.380039	0.39603
+q_ind_7_pop_0	0.635642	0.63566	0.626897	0.643774
+q_ind_8_pop_0	0.515481	0.515459	0.507602	0.524239
+q_ind_9_pop_0	0.384642	0.384677	0.376863	0.392163
+q_ind_10_pop_0	0.519617	0.519597	0.51143	0.528183
+=== K=2 Rep 3 - First 10 individuals ===				
+param	mean	median	ci_0.950_LB	ci_0.950_UB
+q_ind_0_pop_0	0.39714	0.397086	0.388825	0.405943
+q_ind_1_pop_0	0.545858	0.545844	0.538139	0.553959
+q_ind_2_pop_0	0.129726	0.129708	0.124272	0.135044
+q_ind_3_pop_0	0.671119	0.671188	0.663866	0.678265
+q_ind_4_pop_0	0.776672	0.776641	0.769917	0.783029
+q_ind_5_pop_0	0.530329	0.530436	0.523103	0.53735
+q_ind_6_pop_0	0.611697	0.61158	0.603875	0.620106
+q_ind_7_pop_0	0.363949	0.364179	0.355522	0.371692
+q_ind_8_pop_0	0.484762	0.484751	0.476233	0.493177
+q_ind_9_pop_0	0.61526	0.615308	0.607824	0.622979
+q_ind_10_pop_0	0.480949	0.480845	0.472986	0.489499
+
+where rep 2 is essentially switching the ancestry estimates between population 0 and population 1. Like individual 0 has an estimate of 0.39... for rep 1 and 3, but 0.60 for rep 2, which is the opposite. 
+
+k=3 and k=4 have less label switching because there are more populations and it's harder to just flip the labels. I'm asking trevor if this means k=2 is bad, or if I can just switch the labels back and be done with it

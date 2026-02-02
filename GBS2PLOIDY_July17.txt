@@ -1,0 +1,280 @@
+GBS2PLOIDY: Real deal do this for real scripts
+
+July 17th.
+
+I know I have these copied and pasted all over. I"m parking this here, I need to fix the section where it does summaries and calculations so that I can account for the non-numeric data
+
+#!/usr/bin/env nextflow
+
+nextflow.enable.dsl = 2
+
+
+process VCF_TO_HAD {
+    tag "Converting VCF to HAD format"
+    publishDir "${params.outdir}/intermediate", mode: 'copy'
+
+    input:
+    path vcf_file
+
+    output:
+    path "had_data.rds", emit: had_data
+    path "vcf_conversion_log.txt", emit: log
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+
+    # Load required libraries (should be installed by now)
+    library(vcf2ploidy)
+
+    # Start logging
+    cat("=== VCF to HAD Conversion Started ===\\n", file="vcf_conversion_log.txt")
+    cat("Time:", as.character(Sys.time()), "\\n", file="vcf_conversion_log.txt", append=TRUE)  
+    cat("Input file: ${vcf_file}\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Remove double hets: ${params.remove_double_hets}\\n", file="vcf_conversion_log.txt", append=TRUE)
+
+    # Convert VCF to HAD format
+    cat("Converting VCF to HAD format...\\n", file="vcf_conversion_log.txt", append=TRUE)      
+    had_data <- vcf2had(
+        filename = "${vcf_file}",
+        remove_double_hets = ${params.remove_double_hets ? 'TRUE' : 'FALSE'}
+    )
+
+    # Log results
+    cat("HAD conversion complete!\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Data dimensions:", dim(had_data), "\\n", file="vcf_conversion_log.txt", append=TRUE)  
+    cat("Number of samples:", ncol(had_data)/2, "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    cat("Number of variants:", nrow(had_data), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+
+    # Save HAD data
+    saveRDS(had_data, "had_data.rds")
+    cat("HAD data saved to had_data.rds\\n", file="vcf_conversion_log.txt", append=TRUE)       
+
+    cat("Conversion completed at:", as.character(Sys.time()), "\\n", file="vcf_conversion_log.txt", append=TRUE)
+    """
+}
+
+process PLOIDY_ANALYSIS {
+    tag "Estimating ploidy with MCMC"
+    publishDir "${params.outdir}/results", mode: 'copy'
+
+    input:
+    path had_data
+
+    output:
+    path "ploidy_results.rds", emit: results
+    path "ploidy_summary.csv", emit: summary
+    path "analysis_log.txt", emit: log
+
+    script:
+    """
+    #!/usr/bin/env Rscript
+
+    # Load ALL required libraries (should be installed by now)
+    cat("=== Loading Required Libraries ===\\n", file="analysis_log.txt")
+
+    library(rjags)
+    cat("✓ rjags loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+
+    library(gbs2ploidy)
+    cat("✓ gbs2ploidy loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+
+    library(vcf2ploidy)
+    cat("✓ vcf2ploidy loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+
+    library(coda)
+    cat("✓ coda loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+
+    cat("=== Ploidy Analysis Started ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Time:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)        
+
+    # Log analysis parameters
+    cat("\\n=== Analysis Parameters ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Number of classes:", ${params.nclasses}, "\\n", file="analysis_log.txt", append=TRUE) 
+    cat("MCMC chains:", ${params.mcmc_nchain}, "\\n", file="analysis_log.txt", append=TRUE)    
+    cat("MCMC steps:", ${params.mcmc_steps}, "\\n", file="analysis_log.txt", append=TRUE)      
+    cat("MCMC burnin:", ${params.mcmc_burnin}, "\\n", file="analysis_log.txt", append=TRUE)    
+    cat("MCMC thin:", ${params.mcmc_thin}, "\\n", file="analysis_log.txt", append=TRUE)        
+
+    # Load HAD data
+    cat("\\n=== Loading HAD Data ===\\n", file="analysis_log.txt", append=TRUE)
+    had_data <- readRDS("${had_data}")
+    cat("HAD data loaded successfully\\n", file="analysis_log.txt", append=TRUE)
+
+    # Prepare matrices for gbs2ploidy
+    cat("\\n=== Preparing Data Matrices ===\\n", file="analysis_log.txt", append=TRUE)
+    num_cols <- ncol(had_data)
+    cov1_cols <- seq(1, num_cols, 2)  # Odd columns (first allele)
+    cov2_cols <- seq(2, num_cols, 2)  # Even columns (second allele)
+
+    cov1 <- as.matrix(had_data[, cov1_cols])
+    cov2 <- as.matrix(had_data[, cov2_cols])
+    ids <- names(had_data)[cov1_cols]
+
+    cat("Number of samples:", length(ids), "\\n", file="analysis_log.txt", append=TRUE)        
+    cat("Number of variants:", nrow(cov1), "\\n", file="analysis_log.txt", append=TRUE)        
+    cat("Matrix dimensions - cov1:", dim(cov1), "cov2:", dim(cov2), "\\n", file="analysis_log.txt", append=TRUE)
+
+    # Estimate allelic proportions using MCMC (this is the slow step!)
+    cat("\\n=== Starting MCMC Estimation ===\\n", file="analysis_log.txt", append=TRUE)        
+    cat("This step uses JAGS for Bayesian MCMC and may take several hours...\\n", file="analysis_log.txt", append=TRUE)
+    cat("MCMC started at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+
+    props <- estprops(
+        cov1 = cov1,
+        cov2 = cov2,
+        props = c(0.125, 0.17, 0.25, 0.33, 0.375, 0.5, 0.625, 0.67, 0.75, 0.83, 0.875),        
+        mcmc.nchain = ${params.mcmc_nchain},
+        mcmc.steps = ${params.mcmc_steps},
+        mcmc.burnin = ${params.mcmc_burnin},
+        mcmc.thin = ${params.mcmc_thin}
+    )
+
+    cat("MCMC estimation completed at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+
+    # Calculate heterozygosity and depth statistics
+    cat("\\n=== Calculating Summary Statistics ===\\n", file="analysis_log.txt", append=TRUE)  
+    H <- apply(!is.na(cov1), 2, mean)  # Heterozygosity (proportion of non-missing loci)       
+    D <- apply(cov1 + cov2, 2, mean, na.rm = TRUE)  # Mean depth per sample
+
+    cat("Average heterozygosity across samples:", round(mean(H), 3), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Average depth across samples:", round(mean(D), 1), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Heterozygosity range:", round(min(H), 3), "to", round(max(H), 3), "\\n", file="analysis_log.txt", append=TRUE)
+    cat("Depth range:", round(min(D), 1), "to", round(max(D), 1), "\\n", file="analysis_log.txt", append=TRUE)
+
+    # Estimate ploidy using PCA and discriminant analysis
+    cat("\\n=== Estimating Ploidy Classes ===\\n", file="analysis_log.txt", append=TRUE)       
+    cat("Using PCA and discriminant analysis to classify samples...\\n", file="analysis_log.txt", append=TRUE)
+
+    results <- estploidy(
+        alphas = props,
+        het = H,
+        depth = D,
+        train = FALSE,  # No training set - unsupervised classification
+        nclasses = ${params.nclasses},
+        ids = ids,
+        pcs = 1:2  # Use first 2 principal components
+    )
+
+    cat("Ploidy estimation completed!\\n", file="analysis_log.txt", append=TRUE)
+
+    # Save full results object
+    saveRDS(results, "ploidy_results.rds")
+    cat("Full results saved to ploidy_results.rds\\n", file="analysis_log.txt", append=TRUE)   
+
+    # Create human-readable summary table
+    tryCatch({
+        if (!is.null(results\$pp)) {
+            cat("\\n=== Creating Summary Table ===\\n", file="analysis_log.txt", append=TRUE)
+
+            # FIXED: Handle both character and numeric matrices
+            pp <- results\$pp
+            cat("PP matrix class:", class(pp), "\\n", file="analysis_log.txt", append=TRUE)
+            cat("PP matrix dimensions:", dim(pp), "\\n", file="analysis_log.txt", append=TRUE)
+
+            # Convert to numeric if it's a character matrix
+            if (is.character(pp)) {
+                cat("Converting character matrix to numeric...\\n", file="analysis_log.txt", append=TRUE)
+                
+                # Check if first column is sample IDs
+                if (ncol(pp) == 4) {
+                    sample_ids <- pp[, 1]
+                    prob_matrix <- apply(pp[, 2:4], 2, as.numeric)
+                } else if (ncol(pp) == 3) {
+                    sample_ids <- ids  # Use the IDs from earlier
+                    prob_matrix <- apply(pp, 2, as.numeric)
+                } else {
+                    stop("Unexpected probability matrix dimensions")
+                }
+            } else {
+                # Already numeric
+                cat("Matrix is already numeric\\n", file="analysis_log.txt", append=TRUE)
+                if (ncol(pp) == 4) {
+                    sample_ids <- pp[, 1]
+                    prob_matrix <- pp[, 2:4]
+                } else if (ncol(pp) == 3) {
+                    sample_ids <- ids
+                    prob_matrix <- pp
+                } else {
+                    stop("Unexpected probability matrix dimensions")
+                }
+            }
+
+            # Verify conversion worked
+            if (!is.numeric(prob_matrix)) {
+                stop("Failed to convert probability matrix to numeric")
+            }
+
+            cat("Probability matrix converted successfully\\n", file="analysis_log.txt", append=TRUE)
+            cat("Prob matrix dimensions:", dim(prob_matrix), "\\n", file="analysis_log.txt", append=TRUE)
+
+            # Now we can safely do mathematical operations
+            class_assignments <- apply(prob_matrix, 1, which.max)
+            max_probabilities <- apply(prob_matrix, 1, max)
+
+            # Create comprehensive summary
+            summary_df <- data.frame(
+                Sample_ID = sample_ids,
+                Predicted_Ploidy_Class = class_assignments,
+                Max_Probability = round(max_probabilities, 3),
+                Class_1_Prob = round(prob_matrix[,1], 3),
+                Class_2_Prob = round(prob_matrix[,2], 3),
+                Class_3_Prob = round(prob_matrix[,3], 3),
+                Heterozygosity = round(H, 3),
+                Mean_Depth = round(D, 1)
+            )
+
+            write.csv(summary_df, "ploidy_summary.csv", row.names = FALSE)
+            cat("Summary table saved to ploidy_summary.csv\\n", file="analysis_log.txt", append=TRUE)
+
+            # Print final summary statistics
+            cat("\\n=== FINAL RESULTS SUMMARY ===\\n", file="analysis_log.txt", append=TRUE)
+            cat("Total samples analyzed:", nrow(summary_df), "\\n", file="analysis_log.txt", append=TRUE)
+            cat("Class 1 samples:", sum(class_assignments == 1), "\\n", file="analysis_log.txt", append=TRUE)
+            cat("Class 2 samples:", sum(class_assignments == 2), "\\n", file="analysis_log.txt", append=TRUE)
+            cat("Class 3 samples:", sum(class_assignments == 3), "\\n", file="analysis_log.txt", append=TRUE)
+
+            # Calculate confidence statistics
+            high_conf <- sum(max_probabilities > 0.8)
+            med_conf <- sum(max_probabilities > 0.6 & max_probabilities <= 0.8)
+            low_conf <- sum(max_probabilities <= 0.6)
+
+            cat("\\nAssignment Confidence:\\n", file="analysis_log.txt", append=TRUE)
+            cat("High confidence (>0.8):", high_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+            cat("Medium confidence (0.6-0.8):", med_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+            cat("Low confidence (<0.6):", low_conf, "samples\\n", file="analysis_log.txt", append=TRUE)
+
+        } else {
+            cat("ERROR: No assignment probabilities generated!\\n", file="analysis_log.txt", append=TRUE)
+        }
+    }, error = function(e) {
+        cat("ERROR in summary table creation:", e\$message, "\\n", file="analysis_log.txt", append=TRUE)
+        cat("Results RDS file was still saved successfully\\n", file="analysis_log.txt", append=TRUE)
+    })
+cat("\\n=== Analysis Complete ===\\n", file="analysis_log.txt", append=TRUE)
+    cat("Completed at:", as.character(Sys.time()), "\\n", file="analysis_log.txt", append=TRUE)
+    """
+
+
+workflow {
+    // Check if HAD file already exists
+    had_file = file("${params.outdir}/intermediate/had_data.rds")
+
+    if (had_file.exists()) {
+        println "HAD file already exists, skipping conversion..."
+        had_data_ch = Channel.fromPath(had_file)
+    } else {
+        println "HAD file not found, running conversion..."
+        vcf_ch = Channel.fromPath(params.vcf_file, checkIfExists: true)
+        VCF_TO_HAD(vcf_ch)
+        had_data_ch = VCF_TO_HAD.out.had_data
+    }
+
+    // Run ploidy analysis on HAD data
+    PLOIDY_ANALYSIS(had_data_ch)
+
+    // Print completion message
+    PLOIDY_ANALYSIS.out.summary.view {
+        "Ploidy analysis complete! Check results in: ${params.outdir}/results/"
+    }
+}

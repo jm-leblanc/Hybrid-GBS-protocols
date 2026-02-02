@@ -1,0 +1,93 @@
+AUGUST 21st
+
+Analyzing the results of my ENTROPY run of a properly formatted MPGL file, using `estpost.entropy`
+
+All of the properly formatted files, including the code for running ENTROPY, and analyzing the results are found in
+
+```bash
+/home/lebla179/scratch/entropy_k_2-9/fixed_MPGL
+```
+
+### CHECKING DIC VALUES
+
+It's easier to just run this in the shell to check DIC values, rather than have Nextflow run it and try to write the results to an output file:
+
+The basic syntax for getting DIC estimates from your hdf5 files is 
+
+```bash
+./estpost.entropy -s 3 -p deviance filename.hdf5
+```
+
+**Note: if your ENTROPY run created WAIC estimates instead of DIC, use `-p likdata` instead of `-p deviance`
+
+This script can just be pasted and run directly in the shell, it runs through every value of k (2-9) that I computed with my ENTROPY run and gives the DIC value, then it averages the DIC values for all 3 reps of each k value
+
+```bash
+estpost_bin="/home/lebla179/scratch/entropy/software/estpost.entropy"
+hdf5_dir="/home/lebla179/scratch/entropy_k_2-9/fixed_MPGL/results"
+
+echo "=== DIC values (per rep and mean) ==="
+for k in {2..9}; do
+    values=()
+    line="K=$k:"
+    for rep in {1..3}; do
+        hdf5="${hdf5_dir}/fescue_k${k}_rep${rep}_fixed.hdf5"
+        if [[ -f "$hdf5" ]]; then
+            dic=$($estpost_bin -p deviance -s 3 "$hdf5" | awk '/Model DIC:/ {print $3}')
+            values+=($dic)
+            line+=" rep${rep}=$dic"
+        else
+            line+=" rep${rep}=NA"
+        fi
+    done
+    # compute mean if there are numbers
+    if [[ ${#values[@]} -gt 0 ]]; then
+        mean=$(printf "%s\n" "${values[@]}" | awk '{sum+=$1} END {if(NR>0) print sum/NR}')
+        line+=" mean=$mean"
+    fi
+    echo "$line"
+done
+```
+
+My output:
+
+```bash
+=== DIC values (per rep and mean) ===
+K=2: rep1=6510189.02 rep2=6480759.15 rep3=6461637.86 mean=6.4842e+06
+K=3: rep1=6632161.95 rep2=7126505.35 rep3=6794482.44 mean=6.85105e+06
+K=4: rep1=13732609.34 rep2=14340965.78 rep3=18185567.62 mean=1.54197e+07
+K=5: rep1=20083610.00 rep2=12338568.46 rep3=14484108.33 mean=1.56354e+07
+K=6: rep1=25802372.26 rep2=30321311.08 rep3=27479959.28 mean=2.78679e+07
+K=7: rep1=23553599.11 rep2=39545151.65 rep3=16563024.05 mean=2.65539e+07
+K=8: rep1=211035400.64 rep2=55150815.08 rep3=58361036.43 mean=1.08182e+08
+K=9: rep1=124797844.37 rep2=56935966.90 rep3=30997852.73 mean=7.09106e+07
+```
+
+From this, it looks like k=2 and k=3 are the best fitting for my data
+
+### ASSESSING CONVERGENCE
+
+We want to make sure that the chains actually converged during the sampling process (i.e., they found the correct distribution for the data and weren't just wandering around pulling random data from random distributions. 
+
+The basic way to test this is
+
+```bash
+./estpost.entropy -p q -s 4 k*_rep1.hdf5 k*_rep2.hdf5 k*_rep2.hdf5 -o qmcmcdiag_k*.txt
+```
+
+The resulting output will contain two important statistics: `potentialScaleReductionFactor` (aka R^) and `effectiveSampleSize` (ESS)
+
+R^ is a calculation of the variance of estimates within a chain to the variance of estimates across chains
+* Ideally, R^ will be ~1, (specifically, equal to or less than 1.05)
+
+ESS is an estimate of the independent draws across all chains. i.e., because the MCMC makes draws in a stepwise chain, consecutive draws can be correlated to one another. This is why we thin the samples, to reduce the amount of correlation
+* ESS should be approximately equal to the number of samples collected from the MCMC 
+
+qmcmcdiag_k2.txt == n=194 meanESS=1461.63 minESS=70.91 pct_Rhat>1.05=0.0% pct_ESS<200=4.1% == 
+qmcmcdiag_k3.txt == n=291 meanESS=469.98 minESS=7.70 pct_Rhat>1.05=5.2% pct_ESS<200=36.4% == 
+qmcmcdiag_k4.txt == n=388 meanESS=371.32 minESS=10.34 pct_Rhat>1.05=15.7% pct_ESS<200=46.1% == 
+qmcmcdiag_k5.txt == n=485 meanESS=260.62 minESS=1.46 pct_Rhat>1.05=50.5% pct_ESS<200=64.5% == 
+qmcmcdiag_k6.txt == n=582 meanESS=336.75 minESS=3.78 pct_Rhat>1.05=14.4% pct_ESS<200=58.8% == 
+qmcmcdiag_k7.txt == n=679 meanESS=250.96 minESS=1.27 pct_Rhat>1.05=40.5% pct_ESS<200=67.6% == 
+qmcmcdiag_k8.txt == n=776 meanESS=249.91 minESS=1.41 pct_Rhat>1.05=48.8% pct_ESS<200=65.5% == 
+qmcmcdiag_k9.txt == n=873 meanESS=260.00 minESS=1.53 pct_Rhat>1.05=47.5% pct_ESS<200=66.3% [lebla179@fc30554 q_MCMC]$

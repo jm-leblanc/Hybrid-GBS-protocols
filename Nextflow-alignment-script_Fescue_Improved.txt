@@ -1,0 +1,216 @@
+// Improved Nextflow alignment script
+// Santiago's original alignment script uses Bowtie2 instead of BWA; because I want to use BWA, I need to switch aspects of his code to suit BWA (new container, etc.)
+// Improvements suggested by Sequera
+
+#!/usr/bin/env nextflow
+
+nextflow.enable.dsl = 2
+
+// Define input channels
+genome_ch = Channel.fromPath(params.genome)
+
+// Create a channel for input reads - handling files without standard extensions
+reads_ch = Channel
+    .fromPath(params.input)
+    .map { file ->
+        // Extract sample ID from filename (everything before first dot or underscore)
+        def sample_id = file.baseName.replaceAll(/[._].*/, '')
+        return tuple(sample_id, file)
+    }
+    .groupTuple()
+    .map { sample_id, files ->
+        // Sort files to ensure consistent pairing
+        def sorted_files = files.sort()
+        def is_paired = sorted_files.size() == 2
+        return tuple(sample_id, is_paired, sorted_files)
+    }
+
+// Debug: View the contents of input channels
+reads_ch.view{ "Sample: $it" }
+genome_ch.view{ "Genome: $it" }
+
+// Check if BWA index exists, if not create it
+process BWA_INDEX {
+    tag "$genome.baseName"
+    publishDir "${params.genome_index_dir}", mode: 'copy'
+    
+    container 'quay.io/biocontainers/mulled-v2-fe8faa35dbf6dc65a0f7f5d4ea12e31a79f73e40:66ed1b38d280722529bb8a0167b0cf02f8a0b488-0'
+    
+    input:
+    path genome
+
+    output:
+    tuple path(genome), path("${genome}.*"), emit: indexed_genome
+
+    script:
+    def genome_full_name = genome.name
+    """
+    # Check if index files exist in the specified index directory
+    if [ -f "${params.bwa_index}/${genome_full_name}.bwt" ]; then
+        echo "Using existing BWA index from ${params.bwa_index}"
+        # Copy existing index files to work directory
+        cp ${params.bwa_index}/${genome_full_name}.* .
+    else
+        echo "Creating new BWA index for ${genome}"
+        bwa index ${genome}
+        
+        # Verify index creation
+        if [ ! -f "${genome}.bwt" ]; then
+            echo "ERROR: BWA index creation failed"
+            exit 1
+        fi
+    fi
+    
+    # Verify all required index files are present
+    for ext in amb ann bwt pac sa; do
+        if [ ! -f "${genome}.\${ext}" ]; then
+            echo "ERROR: Missing BWA index file: ${genome}.\${ext}"
+            exit 1
+        fi
+    done
+    
+    echo "All BWA index files are ready"
+    """
+}
+
+// Align reads using BWA and sort with Samtools
+process ALIGN_AND_SORT {
+    tag "$sample_id"
+    publishDir "${params.outdir}/aligned", mode: 'copy'
+
+    container 'quay.io/biocontainers/mulled-v2-fe8faa35dbf6dc65a0f7f5d4ea12e31a79f73e40:66ed1b38d280722529bb8a0167b0cf02f8a0b488-0'
+
+    input:
+    tuple val(sample_id), val(is_paired), path(reads)
+    tuple path(genome), path(index_files)
+
+    output:
+    tuple val(sample_id), path("${sample_id}.bam"), path("${sample_id}.bam.bai"), emit: bam
+    path "${sample_id}.flagstat", emit: flagstat
+    path "${sample_id}.stats", emit: stats
+
+    script:
+    def read_group = "@RG\\tID:${sample_id}\\tSM:${sample_id}\\tPL:ILLUMINA"
+    
+    if (is_paired) {
+        """
+        echo "Processing paired-end sample: ${sample_id}"
+        
+        bwa mem -t ${task.cpus} -R "${read_group}" ${genome} ${reads[0]} ${reads[1]} | \\
+        samtools sort -@ ${task.cpus} -o ${sample_id}.bam -
+        
+        samtools index ${sample_id}.bam
+        
+        # Quality checks
+        samtools flagstat ${sample_id}.bam > ${sample_id}.flagstat
+        samtools stats ${sample_id}.bam > ${sample_id}.stats
+        
+        echo "Alignment completed for ${sample_id}"
+        """
+    } else {
+        """
+        echo "Processing single-end sample: ${sample_id}"
+        
+        bwa mem -t ${task.cpus} -R "${read_group}" ${genome} ${reads[0]} | \\
+        samtools sort -@ ${task.cpus} -o ${sample_id}.bam -
+        
+        samtools index ${sample_id}.bam
+        
+        # Quality checks
+        samtools flagstat ${sample_id}.bam > ${sample_id}.flagstat
+        samtools stats ${sample_id}.bam > ${sample_id}.stats
+        
+        echo "Alignment completed for ${sample_id}"
+        """
+    }
+}
+
+// Generate depth per position
+process SAMTOOLS_DEPTH {
+    tag "$sample_id"
+    publishDir "${params.outdir}/depth", mode: 'copy'
+
+    container 'quay.io/biocontainers/samtools:1.15--h1170115_1'
+
+    input:
+    tuple val(sample_id), path(bam), path(bai)
+
+    output:
+    path "${sample_id}_depth.txt"
+
+    script:
+    """
+    samtools --version
+
+    samtools depth ${bam} > ${sample_id}_depth.txt
+
+    # Basic error checking
+    if [ ! -s ${sample_id}_depth.txt ]; then
+        echo "Error: ${sample_id}_depth.txt is empty"
+        exit 1
+    fi
+    
+    # Print summary statistics
+    echo "Depth statistics for ${sample_id}:"
+    awk '{sum+=\$3; count++} END {print "Average depth:", sum/count; print "Total positions:", count}' ${sample_id}_depth.txt
+    """
+}
+
+// Run Quality Control on FastQ Files
+process FASTQC {
+    tag "$sample_id"
+    publishDir "${params.outdir}/fastqc", mode: 'copy'
+    
+    container 'quay.io/biocontainers/fastqc:0.11.9--0'
+
+    input:
+    tuple val(sample_id), val(is_paired), path(reads)
+
+    output:
+    path "fastqc_${sample_id}_logs"
+
+    script:
+    """
+    mkdir fastqc_${sample_id}_logs
+    fastqc -o fastqc_${sample_id}_logs -f fastq -q ${reads}
+    """
+}
+
+// Define the main workflow
+workflow {
+    // Check for existing BWA index files BEFORE starting any processes
+    genome_file = file(params.genome)
+    genome_full_name = genome_file.name  // Use full filename including .fna extension
+
+    // Debugging step; check if nextflow recognizes the index files
+    log.info "Genome file: ${genome_file}"
+    log.info "Genome full name: ${genome_full_name}"
+    log.info "BWA index directory: ${params.bwa_index}"
+    log.info "Looking for: ${params.bwa_index}/${genome_full_name}.bwt"
+
+    bwt_file = file("${params.bwa_index}/${genome_full_name}.bwt")
+    log.info "BWA index file exists: ${bwt_file.exists()}"
+    log.info "BWA index file path: ${bwt_file}"
+    
+    if (bwt_file.exists()) {
+        log.info "Found existing BWA index files - skipping indexing step"
+        
+        // Create channel with existing index files (no process needed)
+        indexed_genome = Channel.value([
+            genome_file,
+            file("${params.bwa_index}/${genome_full_name}.*")
+        ])
+    } else {
+        log.info "BWA index not found - creating new index"
+        indexed_genome = BWA_INDEX(genome_ch)
+    }
+
+    // Run FastQC
+    FASTQC(reads_ch)
+    
+    // Align reads
+    aligned = ALIGN_AND_SORT(reads_ch, indexed_genome)
+
+    // Generate depth
+    SAMTOOLS_DEPTH(aligned.bam)
+}

@@ -1,0 +1,182 @@
+## September 26, 2025
+### Calculating MAF and MAC for my called variants using PLINK
+### All of this is copied directly from seqera. I needed these stats quickly, but I want to come back to this to understand the significance
+
+PLINK Statistical Analysis Guide
+Converting VCF to PLINK and Calculating Population Genetics Statistics
+Overview
+This guide walks through converting a filtered VCF file to PLINK format and calculating key population genetics statistics: Minor Allele Frequency (MAF) and Minor Allele Count (MAC).
+
+Step 1: Load Required Modules
+# Load PLINK module (check available versions first)
+module spider plink
+module load plink/1.9b_6.21  # or whatever version is available on your system
+
+Why: PLINK needs to be loaded as a module on most HPC systems. Different versions may have slightly different syntax.
+
+Step 2: Convert VCF to PLINK Binary Format
+# Convert VCF to PLINK binary format (.bed, .bim, .fam files)
+plink --vcf fescue_biallelic_snps_only.recode.vcf \
+      --make-bed \
+      --out fescue_final \
+      --allow-extra-chr
+
+What this does:
+
+--vcf: Specifies input VCF file
+--make-bed: Creates binary PLINK format (more efficient than text)
+--out: Sets output file prefix
+--allow-extra-chr: Allows non-standard chromosome names (important for non-model organisms)
+Output files created:
+
+fescue_final.bed: Binary genotype data
+fescue_final.bim: Variant information (chromosome, position, alleles)
+fescue_final.fam: Sample information (family structure, sex, phenotype)
+Key information from output:
+
+Total genotyping rate is 0.974234.
+23462 variants and 97 people pass filters and QC.
+
+Overall call rate: 97.42%
+Final dataset: 23,462 SNPs across 97 individuals
+Step 3: Calculate Minor Allele Frequencies (MAF)
+# Generate allele frequency report
+plink --bfile fescue_final \
+      --freq \
+      --out fescue_maf_stats \
+      --allow-extra-chr
+
+What this does:
+
+--bfile: Uses binary PLINK files as input
+--freq: Calculates allele frequencies for each variant
+Creates output file: fescue_maf_stats.frq
+Examine the MAF file structure:
+# Look at the first few lines to understand file format
+head fescue_maf_stats.frq
+
+File structure (.frq):
+
+CHR  SNP   A1   A2          MAF  NCHROBS
+NC_067244.2    .    A    G       0.2796      186
+NC_067244.2    .    G    A       0.2688      186
+
+Column meanings:
+
+CHR: Chromosome/scaffold name
+SNP: Variant ID (often just "." for VCF conversions)
+A1: Minor allele (less frequent)
+A2: Major allele (more frequent)
+MAF: Minor allele frequency (0.0 to 0.5)
+NCHROBS: Number of chromosomes observed (accounts for missing data)
+Calculate average MAF:
+# Calculate average minor allele frequency across all variants
+awk 'NR>1 {sum+=$5; count++} END {printf "Average MAF: %.4f\n", sum/count}' fescue_maf_stats.frq
+
+Explanation:
+
+NR>1: Skip header line
+$5: Column 5 (MAF values)
+sum+=$5; count++: Add up all MAF values and count variants
+END: After processing all lines, calculate and print average
+Step 4: Calculate Minor Allele Counts (MAC)
+# Generate allele count report
+plink --bfile fescue_final \
+      --freq counts \
+      --out fescue_mac_stats \
+      --allow-extra-chr
+
+What this does:
+
+--freq counts: Outputs actual allele counts instead of frequencies
+Creates output file: fescue_mac_stats.frq.counts (note the 's' at the end!)
+Examine the MAC file structure:
+# Look at the first few lines to understand file format
+head fescue_mac_stats.frq.counts
+
+File structure (.frq.counts):
+
+CHR  SNP   A1   A2     C1     C2     G0
+NC_067244.2    .    A    G     52    134      4
+NC_067244.2    .    G    A     50    136      4
+
+Column meanings:
+
+CHR: Chromosome/scaffold name
+SNP: Variant ID
+A1: First allele
+A2: Second allele
+C1: Count of A1 allele
+C2: Count of A2 allele
+G0: Count of missing genotypes
+Calculate average MAC:
+# Calculate average minor allele count
+# MAC = smaller of C1 or C2 (whichever is less frequent)
+awk 'NR>1 {
+    if($5 <= $6) mac=$5; else mac=$6;
+    sum+=mac; count++
+} END {
+    printf "Average MAC: %.2f\n", sum/count
+}' fescue_mac_stats.frq.counts
+
+Explanation:
+
+if($5 <= $6) mac=$5; else mac=$6: Choose the smaller count (minor allele)
+This ensures we always get the count of the less frequent allele
+Step 5: Complete Summary
+echo "=== PLINK POPULATION GENETICS STATISTICS ==="
+echo "Dataset: fescue_biallelic_snps_only.recode.vcf"
+echo "Date: $(date)"
+echo ""
+
+echo "Dataset Overview:"
+echo "  Total SNPs: 23,462"
+echo "  Total individuals: 97"
+echo "  Overall call rate: 97.42%"
+echo ""
+
+echo "Allele Frequency Statistics:"
+
+# MAF
+echo -n "  Average MAF: "
+awk 'NR>1 {sum+=$5; count++} END {printf "%.4f\n", sum/count}' fescue_maf_stats.frq
+
+# MAC from counts
+echo -n "  Average MAC: "
+awk 'NR>1 {
+    if($5 <= $6) mac=$5; else mac=$6;
+    sum+=mac; count++
+} END {
+    printf "%.2f\n", sum/count
+}' fescue_mac_stats.frq.counts
+
+Final Results Summary
+Your Statistics:
+
+Total SNPs: 23,462
+Total individuals: 97
+Overall call rate: 97.42%
+Average MAF: 0.2172 (21.72%)
+Average MAC: 41.14 copies
+Key Concepts
+Minor Allele Frequency (MAF):
+
+Proportion of the less common allele (0.0 to 0.5)
+Normalized measure, comparable across studies
+Your average: 0.2172 (21.72%)
+Minor Allele Count (MAC):
+
+Actual number of copies of the less common allele
+Raw count, depends on sample size
+Your average: 41.14 copies
+Call Rate:
+
+Proportion of successfully genotyped sites
+Higher is better (less missing data)
+Your overall rate: 97.42%
+"Founders Only" Note:
+
+PLINK treats all your samples as "founders" (unrelated individuals)
+This is correct for your GBS study - you want population-level statistics
+All 97 individuals are included in calculations
+This workflow provides the essential statistics your supervisor requested using PLINK!

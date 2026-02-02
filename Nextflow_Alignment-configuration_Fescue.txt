@@ -1,0 +1,105 @@
+### ALIGNMENT CONFIGURATION CODE FOR NEXTFLOW
+
+// Parameter definitions
+## By defining parameters here, you don't have to later type out full paths for input, outdir etc.
+
+
+params { ## do I need to add a home directory here??
+    input = "/home/lebla179/projects/def-mcfarlas/fescue/fastq_files/*" 
+	## location of my fastq files. they don't have .fastq file extensions
+
+    genome = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index/GCF_019359855.2_Kyuss_2.0_genomic.fna"
+	## location of my reference genome.
+
+    genome_index_dir = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index"
+	## location of all my associated reference genome index files, though this may be
+	## unnecessary, as bwa can automatically detect index files in the same folder
+	
+    ## genome_index_base = "genome_index"
+	## This was in Santiago's script because he's using Bowtie2, but apparently not required for bwa
+
+    outdir = "$SCRATCH/alignment/results"
+	## where I want my results to end up
+
+    // General resource parameters
+    max_memory = 16.GB
+    max_cpus = 4
+    max_time = 24.h
+}
+
+// Profiles
+## I don't fully understand this section, but apparently it's making sure everything
+## remains reproducible and sharable across different systems
+profiles {
+    apptainer {
+        singularity.enabled = true
+        singularity.autoMounts = true
+    }
+    test {
+        process.cpus = 2
+        process.memory = '8 GB'
+        process.time = '1h'
+    }
+}
+
+// Process configurations
+process {
+    executor = 'slurm'
+    clusterOptions = '--account=def-mcfarlas'
+
+## Because I am using BWA instead of Bowtie2, I have changed the original container that was
+## listed here in Santiago's version of the code to a container that contains bwa. 
+## NOTE: I admittedly do not fully understand what these containers are, this step was
+## recommended by ChatGPT, and I followed up to verify that the container does run BWA
+## the original container used in Santiago's code is 'quay.io/biocontainers/mulled-v2-ac74a7f02cebcfcc07d8e8d1d750af9c83b4d45a:1744f68fe955578c63054b55309e05b41c37a80d-0'
+
+    withName: ALIGN_AND_SORT {
+        cpus = 4
+        memory = '16 GB'
+        time = '20h'
+        container = 'quay.io/biocontainers/bwa:0.7.17--hed695b0_7'
+    }
+
+    withName: SAMTOOLS_DEPTH {
+        cpus = 2
+        memory = '4 GB'
+        time = '2h'
+        container = 'quay.io/biocontainers/samtools:1.15--h1170115_1'
+    }
+}
+
+// Executor configurations
+executor {
+    queueSize = 100
+    submitRateLimit = '30 sec'
+}
+
+// Singularity/Apptainer configurations
+singularity {
+    enabled = true
+    autoMounts = true
+    cacheDir = "$SCRATCH/.singularity"
+    pullTimeout = '1h'
+}
+
+// Reporting configurations
+timeline {
+    enabled = true
+    file = "${params.outdir}/execution_timeline.html"
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/execution_report.html"
+}
+
+trace {
+    enabled = true
+    file = "${params.outdir}/execution_trace.txt"
+    fields = 'task_id,hash,native_id,process,tag,name,status,exit,module,container,cpus,time,disk,memory,attempt,submit,start,complete,duration,realtime,queue,%cpu,%mem,rss,vmem,peak_rss,peak_vmem,error_action'
+}
+
+// Error strategy
+process.errorStrategy = { task.attempt <= 3 ? 'retry' : 'finish' }
+process.maxRetries = 3
+process.retryDelay = '30 min'

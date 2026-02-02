@@ -1,0 +1,115 @@
+ENTROPY - WAIC version
+
+
+### August 27, 2025: This script was pasted here prior to troubleshooting my ENTROPY scripts and MPGL issues. The script here is probably defunct, keeping it for later reference
+
+## main.nf script for getting WAIC estimates out of ENTROPY 
+
+[lebla179@cedar2 entropy]$ cat main.nf 
+#!/usr/bin/env nextflow
+nextflow.enable.dsl = 2
+
+// Simple parameters
+params.k_values = "2,3,4" // k-values I want to test
+params.replicates = 3 // Number of replicates to run for each value of k
+params.outdir = "results"
+
+process ENTROPY {
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    tuple val(k), val(rep)
+
+    output:
+    path "fescue_k${k}_rep${rep}.hdf5" // output file format, will create .hdf5 files named for each k value and replicate
+
+
+// Entropy parameters explained:
+    // -i: Your input MPGL file
+    // -n: Ploidy level. This can be a single value, defining the same ploidy for all individuals, OR an Infile with ploidy for each individual on a new line
+    // -k: Number of population clusters. The argument here pulls each value of k from params.k_values defined above
+    // -q: File with expected starting values for admixture proportions. These are generated during the conversion of your VCF to MPGL, and are formatted like "qk*inds.txt" for each value of k
+    // -l: Total number of MCMC iterations [default = 10000]
+    // -b: Number of burn-in iterations to discard [default = 5000]
+    // -t: Thinning interval [default = 2]
+    // -D: BOOL flag to generate DIC or WAIC estimates [default = 0, DIC]
+    // -o: Output HDF5 file name
+    
+    script:
+    """
+    /home/lebla179/scratch/entropy/software/entropy \\
+        -i /home/lebla179/scratch/entropy/MPGL_conversion/output/fescue_biallelic_snps_only.recode.mpgl \\
+        -n 2 \\
+        -k ${k} \\
+        -q /home/lebla179/scratch/entropy/MPGL_conversion/output/qk${k}inds.txt \\
+        -l 60000 \\
+        -b 20000 \\
+        -t 20 \\
+        -D 1 \\
+        -o fescue_k${k}_rep${rep}.hdf5 \\
+    """
+}
+
+// Workflow creates 3 replicates for each value of 'k', then runs ENTROPY on all combinations simultaneously
+workflow {
+    // Create all K,replicate combinations
+    Channel
+        .from(params.k_values.split(','))
+        .map { it.toInteger() }
+        .combine(Channel.from(1..params.replicates))
+        .set { combinations }
+
+    // Run entropy
+    ENTROPY(combinations)
+}
+
+
+ENTROPY- DIC VERSION
+
+Essentially the same as above, but it gets DIC estimates instead of WAIC. 
+
+
+#!/usr/bin/env nextflow
+nextflow.enable.dsl = 2
+
+// Simple parameters
+params.k_values = "2,3,4"
+params.replicates = 3
+params.outdir = "results"
+
+process ENTROPY {
+    publishDir "${params.outdir}", mode: 'copy'
+
+    input:
+    tuple val(k), val(rep)
+
+    output:
+    path "fescue_k${k}_rep${rep}_DIC.hdf5"
+
+    script:
+    """
+// These parameters return DIC estimates instead of WAIC. All I've done is remove -D from the parameter list, rather than define it as -D 1. The default [0] produces DIC estimates
+// Otherwise, it has a slightly different naming structure for the output files (just adds "DIC" to the end of each one)
+    /home/lebla179/scratch/entropy/software/entropy \\
+        -i /home/lebla179/scratch/entropy/MPGL_conversion/output/fescue_biallelic_snps_only.recode.mpgl \\
+        -n 2 \\
+        -k ${k} \\
+        -q /home/lebla179/scratch/entropy/MPGL_conversion/output/qk${k}inds.txt \\
+        -l 60000 \\
+        -b 20000 \\
+        -t 20 \\
+        -o fescue_k${k}_rep${rep}_DIC.hdf5 \\
+    """
+}
+
+workflow {
+    // Create all K,replicate combinations
+    Channel
+        .from(params.k_values.split(','))
+        .map { it.toInteger() }
+        .combine(Channel.from(1..params.replicates))
+        .set { combinations }
+
+    // Run entropy
+    ENTROPY(combinations)
+}

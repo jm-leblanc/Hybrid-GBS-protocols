@@ -1,0 +1,124 @@
+Nextflow_Alignment-config_Single-Sample
+
+## AUGUST 27, 2025
+# Wrote this script a while ago, it's probably out of date now, check the latest version in my scratch directory
+
+### RUNNING A SINGLE SAMPLE TO TEST MY NEXTFLOW SCRIPT
+
+## Required files for testing ##
+
+main.nf - My main Nextflow pipeline script
+nextflow.config - Main configuration file
+test.config - Test configuration file
+
+# These should be copied into a test directory. The FASTQ files and reference genome can stay in place because I've specified the paths to find them
+
+# Copy your scripts
+cp /path/to/your/main.nf .
+cp /path/to/your/nextflow.config .
+
+# Create a test directory
+mkdir -p $SCRATCH/alignment_test
+cd $SCRATCH/alignment_test
+
+
+## Request allocation for an interactive job ##
+
+# Request an interactive job with appropriate resources
+salloc --time=2:00:00 --cpus-per-task=4 --mem=16G --account=def-mcfarlas
+
+# Wait for the job to be allocated, then you'll get a shell on a compute node
+
+## Load up the required modules ##
+
+# Load Nextflow and Singularity/Apptainer
+module load nextflow/23.04.0  # or whatever version is available
+module load apptainer/1.1.8   # or singularity if that's what's available
+
+# Check versions (note: you need one hyphen to check NF and two to check apptainer)
+nextflow -version
+apptainer --version 
+
+
+## Running the test configuration file ##
+
+# Run with the test configuration
+nextflow run main.nf -c test.config -profile apptainer
+
+# Alternative: Run with specific sample using command line override
+nextflow run main.nf \
+    --input "/home/lebla179/projects/def-mcfarlas/fescue/fastq_files/YOUR_SAMPLE_NAME*" \
+    --outdir "$SCRATCH/alignment_test/results" \
+    -profile apptainer
+
+# You can also do a "dry run" to see what Nextflow would do without actually running
+
+nextflow run main.nf -c test.config -profile apptainer -preview
+
+
+### TEST CONFIGURATION FILE ###
+
+# Create this in my test directory
+
+// test.config - Override parameters for single sample testing
+params {
+    // Point to a single sample or pair of files
+    input = "/home/lebla179/projects/def-mcfarlas/fescue/fastq_files/SAMPLE_NAME*"  // Replace with actual sample name
+    
+    // Keep other parameters the same
+    genome = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index/GCF_019359855.2_Kyuss_2.0_genomic.fna"
+    genome_index_dir = "/home/lebla179/projects/def-mcfarlas/fescue/genome_index"
+    outdir = "$SCRATCH/alignment_test/results"
+    
+    // Reduce resources for testing
+    max_memory = 8.GB
+    max_cpus = 2
+    max_time = 2.h
+}
+
+// Override process resources for testing
+process {
+    withName: BWA_INDEX {
+        cpus = 1
+        memory = '4.GB'
+        time = '30.min'
+    }
+    
+    withName: ALIGN_AND_SORT {
+        cpus = 2
+        memory = '8.GB'
+        time = '1.h'
+    }
+    
+    withName: SAMTOOLS_DEPTH {
+        cpus = 1
+        memory = '2.GB'
+        time = '30.min'
+    }
+    
+    withName: FASTQC {
+        cpus = 1
+        memory = '2.GB'
+        time = '30.min'
+    }
+}
+
+// To overwrite trace files if I re-run the script
+trace {
+    enabled = true
+    file = "${params.outdir}/execution_trace.txt"
+    overwrite = true
+}
+
+report {
+    enabled = true
+    file = "${params.outdir}/execution_report.html"
+    overwrite = true
+}
+
+timeline {
+    enabled = true
+    file = "${params.outdir}/execution_timeline.html"
+    overwrite = true
+}
+

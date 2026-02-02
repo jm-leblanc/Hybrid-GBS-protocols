@@ -1,0 +1,71 @@
+JULY 22nd
+
+##August 27, 2025
+# I didn't end up using gbs2ploidy anyways, but I'm not sure if this is the latest version of my attempts with it. Check the dates and the scratch directory
+
+Running gbs2ploidy with filtered VCF file and training data
+
+new directory called gbs2ploidy_trained
+
+vcf file is called `fescue_biallelic_snps_only.recode.vcf`
+
+training data for estploidy is provided by
+
+```bash
+train a boolean specifying whether or not a training set with known ploidy should be
+used.
+pl a vector of known ploidies with one entry per individual (use ‘NA’ for individuals with unknown ploidy); only used if train == TRUE.
+set indixes for the training set; only used if train == TRUE.
+```
+
+I need to create some vectors with my training data.
+
+After looking at how my sites were clustered in the genotype calls pca, I've decided to use all of my BEAU sites as training data for F. campestris (8n) and all my GIB3 sites as training for FH (4n).
+Don't have a great reason other than they are the furthest from each other on the x axis. However, it seems like the y-axis on this pca is the thing defining ploidy, so I may be training this incorrectly. Basically, I just tried to pick the ones I knew for certain would be 8n and the ones I knew for certain would be 4n, according to species classifications
+
+R SCRIPT:
+ran an interactive R session in compute Canada to make the vectors I need for the training data
+
+library(vcfR)
+library(dplyr)
+vcf <- read.vcfR("fescue_biallelic_snps_only.recode.vcf") # Filtered VCF, further filtered to remove multiallelic sites and indels
+
+sample_ids <- colnames(vcf@gt)[-1]
+sample_ids
+
+ploidy_vector <- rep(NA, length(sample_ids))
+
+ploidy_vector
+
+names(ploidy_vector) <- sample_ids
+
+ploidy_vector
+
+
+# Set known ploidy for training samples
+ploidy_vector[c("Fescue34", "Fescue35", "Fescue36", "Fescue37", "Fescue38")] <- 8
+
+ploidy_vector[c("Fescue69", "Fescue70", "Fescue71", "Fescue72", "Fescue73")] <- 4
+
+# Training indices: samples with known ploidy
+training_indices <- which(!is.na(ploidy_vector))
+
+
+ploidy_vector
+training_indices
+
+# Save sample IDs as a plain vector (one per line)
+writeLines(names(ploidy_vector), "sample_ids.txt")
+
+# Save ploidy vector as a two-column tab-separated file: sample_id and ploidy
+write.table(
+  data.frame(sample_id = names(ploidy_vector), ploidy = ploidy_vector),
+  file = "ploidy_vector.tsv",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE,
+  col.names = TRUE
+)
+
+Now in my directory I  ave [lebla179@cdr1018 gbs2ploidy_trained]$ ls
+fescue_biallelic_snps_only.recode.vcf  ploidy_vector.tsv  sample_ids.txt

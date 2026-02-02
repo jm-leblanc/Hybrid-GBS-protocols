@@ -1,0 +1,51 @@
+# September 2, 2025
+
+Checking my data for clones with PLINK
+
+# Ask for time
+salloc --time=2:00:00 --mem=8G --cpus-per-task=4 --account=def-mcfarlas 
+
+# Check plink module availability and load
+module avail plink
+module load  plink/2.00a5.8 # Or newest version
+
+# Convert vcf to PLINK-acceptable format
+plink --vcf fescue_biallelic_snps_only.recode.vcf \
+      --double-id \
+      --allow-extra-chr \
+      --make-bed \
+      --out fescue_data
+
+# Run IBD with the --genome command
+plink --bfile fescue_plink \
+      --allow-extra-chr \
+      --genome \
+      --out fescue_ibd_all
+
+# Creates a document pairing up every pair of samples and testing the PI_HAT
+# Check the structure
+
+head fescue_ibd_all.genome
+
+# Quick script to pull out and list and potential clones (if Pi_HAT is close to 1, that means they are very related
+# Count how many potential clone pairs you have
+echo "Potential clones (PI_HAT ≥ 0.95):"
+awk 'NR>1 && $10 >= 0.95' fescue_ibd_all.genome | wc -l
+
+# Also check a slightly lower threshold (PI_HAT ≥ 0.90)
+echo "Potential clones (PI_HAT ≥ 0.90):"
+awk 'NR>1 && $10 >= 0.90' fescue_ibd_all.genome | wc -l
+
+# View the potential clones
+cat potential_clones_095.txt
+
+# Look at the top most related
+# Sort by PI_HAT (column 10) and show the top 10 most related pairs
+awk 'NR>1' fescue_ibd_all.genome | sort -k10,10nr | head -10
+
+# Or if you want to see it with the header
+echo "Top 10 most related sample pairs:"
+head -1 fescue_ibd_all.genome
+awk 'NR>1' fescue_ibd_all.genome | sort -k10,10nr | head -10
+
+The highest in our dataset it 0.7; so, no indication that I collected any clones
