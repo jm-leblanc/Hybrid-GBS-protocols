@@ -1,0 +1,24 @@
+// nextflow.config 
+// ------------------------------------------------------------
+// Configuration file for the main.nf script found in "running-entropy-mainnf.txt"
+// Author: Jenna LeBlanc
+// Created: August 2026
+// Last Updated: March 10, 2026
+
+// Note for users:
+// Make sure this configuration file is in the same directory as the main.nf file
+// ------------------------------------------------------------
+
+process {
+    executor = 'slurm'
+    cpus = 1
+    memory = '8 GB'
+    time = '3.d'
+    clusterOptions = '--account=def-mcfarlas --mail-user=lebla179@yorku.ca --mail-type=ALL'
+    beforeScript = 'module load StdEnv/2023 gcc/12.3 gsl/2.7'
+}
+
+executor {
+    name = 'slurm'
+    queueSize = 30
+}
